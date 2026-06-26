@@ -1,0 +1,26 @@
+# per_row_match_smoke.flow — regression fixture for the per-row TypeEnv
+# binder-slack bug. A `match` with binder arms inside a per-row stage
+# body (select / dedupe / any) pushes binders onto the per-row env;
+# check_per_row_body must size the env to cover them or env_push
+# writes out of bounds. Exercises all three per-row stage callers.
+
+type Status =
+  | Active { since: int }
+  | Banned { reason: string }
+
+type User = { id: string, status: Status }
+
+tool fetch_users(team: string) -> [User]
+  effect deterministic
+
+flow active_since(team: string) -> [int] {
+  fetch_users(team) | select match status { Active a -> a.since, other -> 0 }
+}
+
+flow dedup_since(team: string) -> [User] {
+  fetch_users(team) | dedupe by match status { Active a -> a.since, other -> 0 }
+}
+
+flow any_banned(team: string) -> bool {
+  fetch_users(team) | any match status { Banned b -> true, other -> false }
+}

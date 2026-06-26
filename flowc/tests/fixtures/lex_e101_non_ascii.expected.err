@@ -1,0 +1,1 @@
+tests/fixtures/lex_e101_non_ascii.flow:1:1: error[E101]: non-ASCII byte 0xc3 outside a comment or string literal

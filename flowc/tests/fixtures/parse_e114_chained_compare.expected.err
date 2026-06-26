@@ -1,0 +1,1 @@
+tests/fixtures/parse_e114_chained_compare.flow:2:14: error[E114]: chained comparison '<' is not allowed; use 'and' to chain

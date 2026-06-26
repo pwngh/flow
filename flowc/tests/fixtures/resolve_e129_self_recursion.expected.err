@@ -1,0 +1,1 @@
+tests/fixtures/resolve_e129_self_recursion.flow:2:3: error[E129]: self-recursive flow 'loop_forever' must have a base case (the recursive call appears unconditionally)

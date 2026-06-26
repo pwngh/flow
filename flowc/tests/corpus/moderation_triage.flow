@@ -1,0 +1,199 @@
+# moderation_triage.flow — corpus flow #3 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: OpenAI Moderation API (categories: hate, harassment,
+# sexual, violence, self-harm, spam — scored 0..1 per category).
+# Discord's published safety architecture (proactive ML detection +
+# Safety Rules Engine + human review). Production-scale moderation
+# literature on tiered cascades and confidence-based escalation.
+#
+# A content-moderation triage has this shape — and it is a cascade,
+# not a flat fan-out:
+#
+#   tier 1 (cheap)   blocklist + perceptual-hash + regex
+#                    if any tier-1 signal hits   → action = "remove" (early exit)
+#
+#   tier 2 (medium)  text-classifier  + image-classifier   (parallel)
+#                    combine with account-context (priors, age)
+#                    score per category; severity = max(category scores)
+#
+#   tier 3 (model)   if severity in (0.05, 0.95) → ask LLM judge
+#                                                  (uncertain only)
+#                    otherwise auto-decide
+#
+#   action dispatch  severity < 0.05   → allow
+#                    severity 0.05–0.5 → warn (label, publish)
+#                    severity 0.5–0.8  → hide (sender-only)
+#                    severity 0.8–0.95 → remove
+#                    severity ≥ 0.95 with prior violations → suspend
+#                    LLM-uncertain or borderline → escalate to human
+#
+# The load-bearing fact: the cheap tier exists to *avoid* running the
+# expensive tiers on 95%+ of traffic. If tier-2 always runs, the system
+# does not work at scale. The cascade is not stylistic; it is what
+# makes the system economically possible.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow moderate(ModerationRequest) -> ModerationDecision {
+#     # tier 1 — early exit on cheap match
+#     hit = blocklist_check(it.text)
+#     if hit.matched:
+#       return ModerationDecision {
+#         action: "remove",
+#         severity: 1.0,
+#         requires_human_review: false,
+#         reason: hit.rule_id
+#       }
+#
+#     # tier 2 — parallel; skip image_classifier if no image
+#     text_scores = run_text_classifier(it.text)
+#     image_scores =
+#       if it.image_url.present:
+#         run_image_classifier(it.image_url)
+#       else:
+#         ClassifierScores { all_zero }
+#     account = get_account_context(it.author_id)
+#
+#     severity = max(text_scores.max, image_scores.max)
+#
+#     # tier 3 — only on uncertain band
+#     llm_verdict =
+#       if severity > 0.05 and severity < 0.95:
+#         llm_judge(it, text_scores, image_scores, account)
+#       else:
+#         LlmVerdict { confident: true, action: severity_to_action(severity) }
+#
+#     # action dispatch — multi-branch on combined signals
+#     action =
+#       if llm_verdict.confident == false:
+#         "escalate_human"
+#       else if severity >= 0.95 and account.prior_violations > 0:
+#         "suspend"
+#       else if severity >= 0.8:
+#         "remove"
+#       else if severity >= 0.5:
+#         "hide"
+#       else if severity >= 0.05:
+#         "warn"
+#       else:
+#         "allow"
+#
+#     apply_action(it.content_id, action)
+#     ModerationDecision { action, severity,
+#                          requires_human_review: action == "escalate_human",
+#                          reason: llm_verdict.reason }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — the final action dispatch is
+#                 6-way (allow / warn / hide / remove / suspend /
+#                 escalate). Plus the tier-1 early-exit, plus the
+#                 tier-3 conditional. The whole flow IS branching.
+#
+#   blocked: #2   parallel fan-out + join — text-classifier and
+#                 image-classifier (and account fetch) are independent
+#                 in production but serialise here.
+#
+#   blocked: #3   in-source error handling — classifier timeouts are
+#                 routine; the production behaviour is "if image
+#                 classifier times out, proceed with just text and mark
+#                 lower confidence." No way to encode that fallback.
+#
+#   blocked: #5   conditional binding — image classifier should run
+#                 only on posts with images; LLM judge should run only
+#                 on the uncertain severity band. Today both choices
+#                 are unwritable.
+#
+#   blocked: #10  optional types — image_url is genuinely absent on
+#                 text-only content. denial_reason / rule_id appear
+#                 only on terminal actions.
+#
+#   blocked: #13  Other: lazy / short-circuit evaluation. The cascade
+#                 depends on NOT computing later stages when an
+#                 earlier stage already decided. Even with `if/else`
+#                 added (#5), an eager-evaluation language pays the
+#                 cost of every stage on every input. The construct
+#                 the language is missing is "this binding may not be
+#                 evaluated." Distinct from #5 — the conditional
+#                 binding form expresses *which* value to use, not
+#                 *whether* to compute it. Worth its own rubric slot.
+#
+#   blocked: #13  Other: no string literals — action names ("allow",
+#                 "warn", "hide", "remove", "suspend", "escalate_human")
+#                 cannot be written in source. Action enums must be
+#                 returned by tools as opaque strings or modelled as
+#                 ints. Same gap as flows #1, #2.
+#
+#   shippable: N — what compiles below runs every tier on every input,
+#                  which is the workflow's anti-pattern. It is correct
+#                  in outcome but wrong in shape. A real moderation
+#                  team would not deploy this code.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: every tier runs on every input; one decide tool
+# collapses the action dispatch; one apply tool collapses the execute.
+
+type ModerationRequest  = { content_id: string,
+                          text: string,
+                          image_url: string,
+                          author_id: string }
+
+type AccountContext     = { user_id: string,
+                          prior_violations: int,
+                          age_days: int }
+
+type ClassifierScores   = { hate: float,
+                          harassment: float,
+                          sexual: float,
+                          violence: float,
+                          self_harm: float,
+                          spam: float }
+
+type ModerationDecision = { action: string,
+                          severity: float,
+                          requires_human_review: bool }
+
+tool blocklist_check       (text:     string)             -> bool
+  effect deterministic
+tool run_text_classifier   (text:     string)             -> ClassifierScores
+  effect model("text-classify-v1")
+tool run_image_classifier  (url:      string)             -> ClassifierScores
+  effect model("image-classify-v1")
+tool get_account_context   (user_id:  string)             -> AccountContext
+  effect deterministic
+tool decide_action         (req:           ModerationRequest,
+                            text_scores:   ClassifierScores,
+                            image_scores:  ClassifierScores,
+                            account:       AccountContext) -> ModerationDecision
+  effect model("moderate-decide-v1")
+tool apply_action          (content_id: string,
+                            action:     string)            -> bool
+  effect mutation
+
+flow moderate(ModerationRequest) -> ModerationDecision {
+  # awkward: tier-1 result discarded; should short-circuit the rest of
+  # the flow but cannot (#13 lazy eval, #1 early-exit branching).
+  blocked_by_list = blocklist_check(it.text)
+
+  # awkward: image classifier runs even on text-only posts because
+  # there's no way to skip it (#5 conditional binding, #10 optional
+  # types). Production paid expense per call here.
+  text_scores  = run_text_classifier(it.text)
+  image_scores = run_image_classifier(it.image_url)
+  account      = get_account_context(it.author_id)
+
+  # workaround: the entire tier-3 LLM judgment and the 6-way action
+  # dispatch collapse into one tool. The source no longer describes
+  # the cascade; it describes "ask the oracle."
+  decision = decide_action(it, text_scores, image_scores, account)
+
+  # awkward: bool return discarded; "allow" decisions should not apply
+  # any action but apply_action runs regardless (#1 prevents branching).
+  applied = apply_action(it.content_id, decision.action)
+
+  decision
+}

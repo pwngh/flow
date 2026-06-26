@@ -1,0 +1,1 @@
+tests/fixtures/check_e149_operator_type.flow:2:5: error[E149]: operator '%' requires int operands, got float and float

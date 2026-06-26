@@ -1,0 +1,1 @@
+tests/fixtures/check_e160_nonexhaustive_match.flow:7:3: error[E160]: non-exhaustive match: uncovered variant 'CapacityIssue'

@@ -1,0 +1,11 @@
+type Hypothesis =
+  | DeployCaused { suspect_deploy_id: string }
+  | CapacityIssue { resource: string }
+
+flow describe(string) -> string {
+  h = DeployCaused { suspect_deploy_id: it }
+  match h {
+    DeployCaused d -> d.suspect_deploy_id,
+    other          -> it
+  }
+}

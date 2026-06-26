@@ -1,0 +1,11 @@
+type Addr = { zip: int }
+type User = { addr: Addr }
+
+tool users() -> [User]
+  effect deterministic
+
+flow demo(string) -> [User] {
+  us = users()
+     | where addr.zp <= 100
+  us
+}

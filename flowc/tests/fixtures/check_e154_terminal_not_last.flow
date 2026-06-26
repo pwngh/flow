@@ -1,0 +1,11 @@
+type Plan = { id: string, cost: int }
+
+tool best_plans() -> [Plan]
+  effect deterministic
+
+flow demo(Plan) -> Plan {
+  p = best_plans()
+    | pick using primary
+    | rank cost asc
+  p
+}

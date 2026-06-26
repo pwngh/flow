@@ -1,0 +1,3 @@
+type User = { id: string, age: int, balance: float }
+tool create_user(email: string) -> User
+  effect deterministic

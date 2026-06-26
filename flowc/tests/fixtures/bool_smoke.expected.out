@@ -1,0 +1,68 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/bool_smoke.flow",
+  "types": [],
+  "tools": [],
+  "flows": [
+    {
+      "name": "gate",
+      "params": [
+        {"name": "a", "type": "bool", "implicit": false},
+        {"name": "b", "type": "bool", "implicit": false},
+        {"name": "c", "type": "bool", "implicit": false}
+      ],
+      "output": "int",
+      "bindings": [
+        {
+          "name": "approve",
+          "expr": {
+            "kind": "binop",
+            "op": "or",
+            "left": {
+              "kind": "unop",
+              "op": "not",
+              "operand": {
+                "kind": "binop",
+                "op": "and",
+                "left": {
+                  "kind": "path",
+                  "segments": ["a"]
+                },
+                "right": {
+                  "kind": "path",
+                  "segments": ["b"]
+                }
+              }
+            },
+            "right": {
+              "kind": "path",
+              "segments": ["c"]
+            }
+          }
+        }
+      ],
+      "return": {
+        "kind": "conditional",
+        "branches": [
+          {
+            "cond": {
+              "kind": "path",
+              "segments": ["approve"]
+            },
+            "consequent": {
+              "kind": "literal",
+              "value": 1,
+              "type": "int"
+            }
+          }
+        ],
+        "else": {
+          "kind": "literal",
+          "value": 0,
+          "type": "int"
+        }
+      }
+    }
+  ]
+}

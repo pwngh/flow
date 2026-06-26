@@ -1,0 +1,1 @@
+tests/fixtures/check_e146_equality_nonprimitive.flow:7:5: error[E146]: equality '==' not admitted for Hypothesis; only primitives compare

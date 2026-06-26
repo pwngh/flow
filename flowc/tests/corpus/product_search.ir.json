@@ -1,0 +1,271 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/product_search.flow",
+  "types": [
+    {
+      "name": "SearchRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "query", "type": "string"},
+        {"name": "customer_id", "type": "string"},
+        {"name": "page_size", "type": "int"},
+        {"name": "region", "type": "string"}
+      ]
+    },
+    {
+      "name": "Product",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "title", "type": "string"},
+        {"name": "price_cents", "type": "int"},
+        {"name": "stock_count", "type": "int"},
+        {"name": "margin_bps", "type": "int"},
+        {"name": "brand", "type": "string"},
+        {"name": "category", "type": "string"},
+        {"name": "relevance", "type": "float"},
+        {"name": "score", "type": "float"}
+      ]
+    },
+    {
+      "name": "FacetCount",
+      "kind": "record",
+      "fields": [
+        {"name": "attribute", "type": "string"},
+        {"name": "value", "type": "string"},
+        {"name": "n", "type": "int"}
+      ]
+    },
+    {
+      "name": "SearchResult",
+      "kind": "record",
+      "fields": [
+        {"name": "featured", "type": "Product"},
+        {"name": "results", "type": "[Product]"},
+        {"name": "facets", "type": "[FacetCount]"},
+        {"name": "total_count", "type": "int"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "retrieve_candidates",
+      "input": [
+        {"name": "query", "type": "string"},
+        {"name": "customer_id", "type": "string"},
+        {"name": "region", "type": "string"},
+        {"name": "limit", "type": "int"}
+      ],
+      "output": "[Product]",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "score_and_merchandise",
+      "input": [
+        {"name": "req", "type": "SearchRequest"},
+        {"name": "candidates", "type": "[Product]"}
+      ],
+      "output": "[Product]",
+      "effect": {
+        "level": "model",
+        "model": "score-merchandise-v1"
+      }
+    },
+    {
+      "name": "select_top_n",
+      "input": [
+        {"name": "scored", "type": "[Product]"},
+        {"name": "n", "type": "int"}
+      ],
+      "output": "[Product]",
+      "effect": {
+        "level": "pure"
+      }
+    },
+    {
+      "name": "compute_facets",
+      "input": [
+        {"name": "scored", "type": "[Product]"}
+      ],
+      "output": "[FacetCount]",
+      "effect": {
+        "level": "pure"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "search",
+      "params": [
+        {"name": "it", "type": "SearchRequest", "implicit": true}
+      ],
+      "output": "SearchResult",
+      "bindings": [
+        {
+          "name": "candidates",
+          "expr": {
+            "kind": "call",
+            "tool": "retrieve_candidates",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              },
+              {
+                "field": "customer_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "customer_id"]
+                }
+              },
+              {
+                "field": "region",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "region"]
+                }
+              },
+              {
+                "field": "limit",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "page_size"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "scored",
+          "expr": {
+            "kind": "call",
+            "tool": "score_and_merchandise",
+            "args": [
+              {
+                "field": "req",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "candidates",
+                "value": {
+                  "kind": "path",
+                  "segments": ["candidates"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "featured",
+          "expr": {
+            "kind": "pipeline",
+            "source": {
+              "kind": "path",
+              "segments": ["scored"]
+            },
+            "stages": [
+              {
+                "kind": "filter",
+                "op": "where",
+                "predicate": "stock_count > 0 and margin_bps >= 100"
+              },
+              {
+                "kind": "sort",
+                "op": "rank",
+                "by": "score",
+                "direction": "desc"
+              },
+              {
+                "kind": "terminal",
+                "op": "pick",
+                "model": "primary"
+              }
+            ]
+          }
+        },
+        {
+          "name": "top_picks",
+          "expr": {
+            "kind": "call",
+            "tool": "select_top_n",
+            "args": [
+              {
+                "field": "scored",
+                "value": {
+                  "kind": "path",
+                  "segments": ["scored"]
+                }
+              },
+              {
+                "field": "n",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "page_size"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "facets",
+          "expr": {
+            "kind": "call",
+            "tool": "compute_facets",
+            "args": [
+              {
+                "field": "scored",
+                "value": {
+                  "kind": "path",
+                  "segments": ["scored"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "construct",
+        "type": "SearchResult",
+        "fields": [
+          {
+            "name": "featured",
+            "value": {
+              "kind": "path",
+              "segments": ["featured"]
+            }
+          },
+          {
+            "name": "results",
+            "value": {
+              "kind": "path",
+              "segments": ["top_picks"]
+            }
+          },
+          {
+            "name": "facets",
+            "value": {
+              "kind": "path",
+              "segments": ["facets"]
+            }
+          },
+          {
+            "name": "total_count",
+            "value": {
+              "kind": "path",
+              "segments": ["it", "page_size"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

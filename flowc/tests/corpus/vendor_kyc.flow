@@ -1,0 +1,355 @@
+# vendor_kyc.flow — corpus flow #14 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Persona AML/KYC compliance docs (orchestrated
+# government-ID OCR, biometric liveness, configurable workflow engine
+# with auto-approve / auto-decline / human review routing). Alloy
+# decisioning engine and perpetual KYB (single-API verification of
+# business + UBOs in parallel; event-driven re-checks on registry
+# updates and watchlist refreshes). Mercury onboarding (observable:
+# business info → ID for each owner → bank info → sanctions/PEP).
+#
+# A vendor / business KYC workflow has this shape:
+#
+#   ingest        document uploads (per person + per business):
+#                 articles of incorporation, IDs (passport / driver's
+#                 license / national ID — 200+ formats), proof of
+#                 address, bank statements
+#
+#   OCR + verify  per-document (map):
+#                   OCR extraction
+#                   authenticity check (anti-tamper: fonts, security
+#                                       features, template match)
+#                   biometric: face match selfie vs ID photo
+#                   liveness check (active + passive)
+#
+#   screening     in parallel, per business + per UBO:
+#                   sanctions    OFAC, EU, UK, UN — MANDATORY,
+#                                                 cannot skip
+#                                                 regardless of risk
+#                   PEP          politically exposed persons
+#                   adverse      negative media search
+#                   KYB          business registry lookup (Companies
+#                                                 House, Secretary of
+#                                                 State, etc.)
+#                   ownership    beneficial-ownership graph (UBOs
+#                                                 can themselves be
+#                                                 businesses — graph
+#                                                 may be 5+ levels)
+#
+#   risk scoring  fold per-check results → risk band + reason codes
+#                 reason codes are REGULATORY (FinCEN / FCA / similar)
+#
+#   decision      auto-approve   low risk, no hits
+#                 EDD            medium — enhanced due diligence
+#                                (additional docs, manual outreach)
+#                 manual review  borderline, complex ownership
+#                 block          high risk, watchlist hit
+#                 SAR            sanctions hit — file Suspicious
+#                                Activity Report with regulator
+#                                (this fires REGARDLESS of business
+#                                decision)
+#
+#   audit trail   every decision persisted with reason codes mapped
+#                 to source-of-truth data points — examiner reads
+#                 this on FinCEN audit
+#
+#   perpetual     event-driven re-checks:
+#                   watchlist refresh → re-screen
+#                   registry update    → re-verify
+#                   ownership change   → re-graph + re-screen
+#                 also periodic re-check every 12 months
+#
+# Three load-bearing facts:
+#
+#   (a) Document types are STRUCTURALLY DIFFERENT. A passport has
+#       {issuing_country, mrz, expiry, photo}; a driver's license has
+#       {state, dl_number, class, address}; articles of incorporation
+#       have {entity_name, registered_office, directors}; a utility
+#       bill has {issuer, address, billed_at, amount}. No honest fat
+#       record covers all four — half the fields are always wrong.
+#       FOURTH corpus occurrence of #11 sum types (after #10 dispute
+#       evidence, #12 gate results, #13 source types). #11 is by now
+#       comprehensively confirmed.
+#
+#   (b) #14 lazy/short-circuit DOES NOT APPLY HERE. Sanctions
+#       screening is regulatory-mandatory; the workflow cannot skip
+#       it even when other signals would auto-approve. This is the
+#       second negative signal for #14 (flow #8 bulk_import was the
+#       first). The slot's name needs to imply OPT-IN, not
+#       opportunistic — the rubric should not encourage the
+#       language designer to make every binding lazy by default,
+#       only to permit it where the workflow opts in.
+#
+#   (c) The audit trail is regulatory infrastructure, not logging.
+#       Every reason code must map to source data; the examiner
+#       reads the audit on FinCEN review. If the decision policy
+#       lives inside an opaque tool, the audit is unauditable. This
+#       is the same regulated-domain argument as flow #5 loan
+#       (ECOA) but stronger — sanctions violations carry criminal
+#       liability for the compliance officer personally.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow kyc(KYCRequest) -> KYCDecision {
+#     # per-document OCR + verification (map):
+#     documents = map(it.document_urls, url -> ingest_document(url))
+#     doc_checks = map(documents, d -> match d.kind {
+#       Passport p   -> verify_passport(p)            # sub-flow per kind
+#       License  l   -> verify_license(l)             # different fields
+#       Articles a   -> verify_articles(a)
+#       Utility  u   -> verify_utility(u)
+#     })
+#
+#     # per-UBO screening (map; recursive if UBO is a business):
+#     ubo_checks = map(it.beneficial_owners, ubo ->
+#       if ubo.is_business:
+#         kyc(KYCRequest { business_id: ubo.business_id, ... })  # recurse
+#       else:
+#         {
+#           sanctions: sanctions_check(ubo),
+#           pep:       pep_check(ubo),
+#           adverse:   adverse_media(ubo)
+#         }
+#     )
+#
+#     # business-level checks (parallel with UBO):
+#     business_sanctions = sanctions_check(it.business_name)
+#     kyb               = registry_check(it.business_id, it.jurisdiction)
+#
+#     # mandatory side effect — SAR fires regardless of decision:
+#     if any(ubo_checks, c -> c.sanctions.hit) or business_sanctions.hit:
+#       file_sar(it, ubo_checks, business_sanctions)   # to FinCEN
+#
+#     # risk scoring with regulatory reason codes:
+#     risk = compute_risk(doc_checks, ubo_checks, business_sanctions, kyb)
+#     reason_codes = collect_reason_codes(risk)         # mandatory mapping
+#
+#     # multi-branch decision:
+#     outcome =
+#       if business_sanctions.hit:           "block"
+#       else if risk.score >= 0.8:           "block"
+#       else if risk.score >= 0.5:           "manual_review"
+#       else if risk.score >= 0.3:           "edd"
+#       else:                                "approve"
+#
+#     # perpetual monitoring registration:
+#     schedule_next_review(it.business_id, +12.months)
+#     subscribe_watchlist_events(it.business_id)
+#     subscribe_registry_events(it.business_id, it.jurisdiction)
+#
+#     # full audit trail emit:
+#     persist_audit(it, doc_checks, ubo_checks, business_sanctions,
+#                   kyb, risk, reason_codes, outcome)
+#
+#     KYCDecision { outcome, risk_band: risk.band,
+#                   reason_codes, requires_manual_review: outcome == "manual_review",
+#                   sar_filed: business_sanctions.hit,
+#                   next_review_at: ... }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — 5-way outcome (approve /
+#                 EDD / manual / block / SAR-required) plus the
+#                 mandatory SAR side-effect that fires *regardless*
+#                 of outcome. Plus per-document-type dispatch (4+
+#                 document kinds).
+#
+#   blocked: #2   parallel fan-out + join — sanctions, PEP, adverse,
+#                 KYB all parallelisable per UBO and per business.
+#                 At a 3-UBO business, that's 12+ independent calls
+#                 serialised today.
+#
+#   blocked: #3   in-source error handling — predicted. Sanctions
+#                 API outage cannot be tolerated — the workflow must
+#                 retry until success because the regulator does not
+#                 accept "we tried." This is a third sub-form of #3:
+#                 not recovery, not accumulation, but MANDATORY
+#                 RETRY. Worth tracking as 3c if it recurs (flow
+#                 #19 decomposition or #20 streaming).
+#
+#   blocked: #4   loops / fold over list — map over documents, map
+#                 over UBOs, map over per-UBO checks. Plus the
+#                 recursive case: a UBO that is itself a business
+#                 requires a recursive call back into this flow.
+#                 That's #4 plus #7 in combination.
+#
+#   blocked: #5   conditional binding — EDD only on medium risk;
+#                 SAR side effect only on sanctions hit; perpetual-
+#                 monitoring subscription only on approve outcomes;
+#                 recursive UBO call only when UBO.is_business.
+#
+#   blocked: #7   sub-flow composition — PREDICTED. Per-doc-kind
+#                 verification is one sub-flow per kind (passport,
+#                 license, articles, utility — different field
+#                 readers); per-UBO screening is a sub-flow; KYB is
+#                 a sub-flow. AND the workflow recurses when a UBO
+#                 is itself a business — this is the corpus's first
+#                 occurrence of a flow that wants to CALL ITSELF.
+#                 Same shape as flow #19 will hit deliberately;
+#                 surfaced here organically.
+#
+#   blocked: #10  optional types — sar_filed only on sanctions-hit;
+#                 next_review_at only on approve; manual_review_id
+#                 only on manual outcomes; jurisdiction-specific
+#                 fields conditional on jurisdiction (Companies
+#                 House number for UK only, EIN for US only).
+#
+#   blocked: #11  sum types / variants — FOURTH corpus occurrence.
+#                 Document kinds are structurally variant. The
+#                 dispute-evidence pattern from flow #10 recurs
+#                 here with 4+ document types. Per-UBO screening
+#                 result is also variant: Clear | SanctionsHit |
+#                 PEPHit | AdverseMediaHit | Inconclusive. After
+#                 four occurrences across distinct domains this is
+#                 incontrovertibly load-bearing.
+#
+#   blocked: #12  time / scheduling — two sub-shapes:
+#                 12b pause-and-resume: manual review queues — flow
+#                     pauses for hours to days until a compliance
+#                     officer reviews and clicks decision.
+#                 12c scheduled future trigger: PERPETUAL KYB. Re-
+#                     check every 12 months; subscribe to watchlist
+#                     refresh events; subscribe to registry update
+#                     events. Each subscription is a long-lived
+#                     trigger registration. Second occurrence (after
+#                     flow #1 trial-end reminder, flow #9 nudges).
+#
+#   blocked: #15  list-literal construction — seventh occurrence.
+#                 Required-checks list per jurisdiction; reason-
+#                 code list; audit-trail entries.
+#
+#   blocked: #16  aggregation primitives — fifth occurrence. Fold
+#                 per-check results into risk score; concat reason
+#                 codes; any() check for "any sanctions hit
+#                 anywhere in the UBO graph."
+#
+#   blocked: #13  Other: no string literals — jurisdiction codes
+#                 (ISO-3166), document kinds, outcome enum, FinCEN
+#                 reason codes. Recurring.
+#
+#   blocked: #13  Other: MANDATORY SIDE EFFECTS. SAR filing fires
+#                 regardless of the main flow's return value. The
+#                 audit-trail emit fires on every decision. The
+#                 perpetual-monitoring subscription fires on approve.
+#                 The Flow runtime model is "compute one return
+#                 value"; mandatory side effects sit outside that
+#                 model. May be addressable by #14 (lazy/conditional
+#                 binding of a side-effect tool call), but the
+#                 conceptual gap is "the flow must DO these things
+#                 even though the consumer only cares about the
+#                 return." First clear surfacing of this shape.
+#
+#   NEGATIVE     #14 lazy / short-circuit DOES NOT APPLY. Sanctions
+#                screening is regulatory-mandatory; the workflow
+#                cannot skip it even when other signals would auto-
+#                approve. This is the second negative signal for
+#                #14 (first: flow #8 bulk_import — every row must
+#                validate). The promoted slot's framing should be
+#                "opt-in lazy," not "lazy by default." A language
+#                that makes laziness universal would break KYC.
+#
+#   shippable: N — the workflow that compiles below collapses the
+#                  document-kind dispatch, the per-UBO recursion,
+#                  the mandatory SAR side-effect, the perpetual
+#                  monitoring registration, and the audit-trail
+#                  emit into one decide_kyc tool. An examiner
+#                  reading this Flow on FinCEN review cannot answer
+#                  "what does the system do when a UBO is itself a
+#                  business?" or "where in the source does sanctions
+#                  reporting happen?" — the answers live inside the
+#                  decide_kyc tool's code, not in the workflow.
+#                  Structurally un-auditable.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: per-doc ingestion handed to a single verify-all
+# tool; four screening tools serialised; one decide tool collapses
+# scoring + outcome + SAR + monitoring + audit.
+
+type KYCRequest      = { business_id:       string,
+                       business_name:     string,
+                       business_type:     string,
+                       jurisdiction:      string,
+                       beneficial_owners: [BeneficialOwner],
+                       document_urls:     [string] }
+
+type BeneficialOwner = { id:                  string,
+                       name:                string,
+                       dob:                 int,
+                       ownership_pct:       float,
+                       jurisdiction:        string,
+                       country_of_residence: string,
+                       is_business:         bool,
+                       sub_business_id:     string }
+
+type Document        = { id:                  string,
+                       kind:                string,
+                       extracted_text:      string,
+                       authenticity_score:  float,
+                       ocr_confidence:      float }
+
+type DocVerification = { all_verified: bool,
+                       failures:     [string] }
+
+type ScreeningResult = { source:   string,
+                       hit:      bool,
+                       severity: float,
+                       hits:     [string] }
+
+type KYCDecision     = { outcome:                string,
+                       risk_band:              string,
+                       requires_manual_review: bool,
+                       sar_filed:              bool,
+                       reason_codes:           [string],
+                       next_review_at:         int }
+
+tool ingest_documents          (urls: [string])                          -> [Document]
+  effect deterministic
+tool verify_documents          (docs: [Document])                        -> DocVerification
+  effect deterministic
+tool run_sanctions_screening   (business_name: string,
+                                owners:        [BeneficialOwner])        -> ScreeningResult
+  effect deterministic
+tool run_pep_screening         (owners: [BeneficialOwner])               -> ScreeningResult
+  effect deterministic
+tool run_adverse_media         (business_name: string,
+                                owners:        [BeneficialOwner])        -> ScreeningResult
+  effect deterministic
+tool run_business_registry     (business_id:  string,
+                                jurisdiction: string)                    -> ScreeningResult
+  effect deterministic
+tool decide_kyc                (req:        KYCRequest,
+                                doc_check:  DocVerification,
+                                sanctions:  ScreeningResult,
+                                pep:        ScreeningResult,
+                                adverse:    ScreeningResult,
+                                kyb:        ScreeningResult)             -> KYCDecision
+  effect model("kyc-decision-v1")
+
+flow kyc(KYCRequest) -> KYCDecision {
+  # awkward: per-document OCR + per-kind verification (passport vs
+  # license vs articles vs utility) hidden inside two tools. Counts
+  # toward #4 map, #7 per-kind sub-flow, #11 variant dispatch.
+  documents = ingest_documents(it.document_urls)
+  doc_check = verify_documents(documents)
+
+  # awkward: four screening calls serialised — independent in
+  # production, run parallel per business+UBO. Also: per-UBO
+  # recursion (when a UBO is itself a business) is not expressed;
+  # all UBOs get treated as individuals. Counts toward #2, #4, #7.
+  sanctions = run_sanctions_screening(it.business_name, it.beneficial_owners)
+  pep       = run_pep_screening(it.beneficial_owners)
+  adverse   = run_adverse_media(it.business_name, it.beneficial_owners)
+  kyb       = run_business_registry(it.business_id, it.jurisdiction)
+
+  # workaround: risk scoring + reason-code mapping + 5-way outcome
+  # dispatch + mandatory SAR filing + perpetual-monitoring
+  # subscription + audit-trail emit all collapse into one tool.
+  # Examiner cannot read the policy from the source.
+  decision = decide_kyc(it, doc_check, sanctions, pep, adverse, kyb)
+
+  decision
+}

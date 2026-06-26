@@ -1,0 +1,6 @@
+type User = { id: string }
+
+flow demo(User) -> User {
+  x = some_undefined_name
+  x
+}

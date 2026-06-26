@@ -1,0 +1,221 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/aggregator_smoke.flow",
+  "types": [
+    {
+      "name": "Item",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "cost", "type": "int"},
+        {"name": "flagged", "type": "bool"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "fetch_items",
+      "input": [
+        {"name": "uid", "type": "string"}
+      ],
+      "output": "[Item]",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "total_cost",
+      "params": [
+        {"name": "uid", "type": "string", "implicit": false}
+      ],
+      "output": "int",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_items",
+          "args": [
+            {
+              "field": "uid",
+              "value": {
+                "kind": "path",
+                "segments": ["uid"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "terminal",
+            "op": "sum",
+            "field": "cost"
+          }
+        ]
+      }
+    },
+    {
+      "name": "item_count",
+      "params": [
+        {"name": "uid", "type": "string", "implicit": false}
+      ],
+      "output": "int",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_items",
+          "args": [
+            {
+              "field": "uid",
+              "value": {
+                "kind": "path",
+                "segments": ["uid"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "terminal",
+            "op": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "most_expensive",
+      "params": [
+        {"name": "uid", "type": "string", "implicit": false}
+      ],
+      "output": "int",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_items",
+          "args": [
+            {
+              "field": "uid",
+              "value": {
+                "kind": "path",
+                "segments": ["uid"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "terminal",
+            "op": "max",
+            "field": "cost"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cheapest",
+      "params": [
+        {"name": "uid", "type": "string", "implicit": false}
+      ],
+      "output": "int",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_items",
+          "args": [
+            {
+              "field": "uid",
+              "value": {
+                "kind": "path",
+                "segments": ["uid"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "terminal",
+            "op": "min",
+            "field": "cost"
+          }
+        ]
+      }
+    },
+    {
+      "name": "has_flagged",
+      "params": [
+        {"name": "uid", "type": "string", "implicit": false}
+      ],
+      "output": "bool",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_items",
+          "args": [
+            {
+              "field": "uid",
+              "value": {
+                "kind": "path",
+                "segments": ["uid"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "terminal",
+            "op": "any",
+            "predicate": {
+              "kind": "path",
+              "segments": ["flagged"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "all_flagged",
+      "params": [
+        {"name": "uid", "type": "string", "implicit": false}
+      ],
+      "output": "bool",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_items",
+          "args": [
+            {
+              "field": "uid",
+              "value": {
+                "kind": "path",
+                "segments": ["uid"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "terminal",
+            "op": "all",
+            "predicate": {
+              "kind": "path",
+              "segments": ["flagged"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+# Emscripten build outputs (produced by build.sh)
+flowc.js
+flowc.wasm
+flowd.js
+flowd.wasm

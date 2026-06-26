@@ -1,0 +1,323 @@
+# iterative_refinement.flow — corpus flow #18 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape stress test #2 of 4. Domain flows stress breadth of subject;
+# shape tests are pointed at joints the language is not built for.
+# This flow stresses the WHILE-LOOP-WITH-STATE case: iterate until a
+# termination predicate fires, with bounded fallback caps.
+#
+# Shape source: Constitutional AI (self-critique against named
+# principles; "iterative review to ensure principles facilitate
+# effective self-critique and revision"). LangChain SmartLLMChain
+# (three-step Ideation / Critique / Resolve; max_iterations attribute;
+# early_stopping_method "force" vs "generate"). LangGraph Reflection /
+# Reflexion patterns (stateful cyclical graphs, loopCount field to
+# prevent infinite loops, actor agent critiques each response and
+# grounds critique in external data). CRITIC paper (LLM uses tools to
+# validate its own outputs).
+#
+# An iterative-refinement workflow has this shape:
+#
+#   generate         model call: produce initial draft from task
+#
+#   loop UNTIL { quality_met  OR
+#                budget_used_cents >= budget_limit  OR
+#                iterations    >= max_iterations  OR
+#                refiner_failed_repeatedly }
+#
+#     critique       model call: critic reads current_draft and
+#                    produces { score: float, feedback: string,
+#                                citations: [...], gaps: [...] }
+#                    Reflexion pattern: critic grounds critique in
+#                    external data, enumerates missing aspects
+#
+#     evaluate       if critique.score >= threshold:
+#                      break with current_draft as final
+#                    if budget OR iter cap hit:
+#                      break with current_draft + "stopped_early"
+#
+#     refine         model call: refiner takes (current_draft,
+#                                                critique) and emits
+#                                                a revised draft
+#
+#     accumulate     iterations += 1
+#                    budget_used_cents += this_iter_cost
+#                    history.append({draft, critique, refined})
+#                    emit_progress(iteration_id)
+#
+#   synthesise       return { final_draft, score, iteration_history,
+#                              stopped_reason, total_cost }
+#
+# Three load-bearing facts:
+#
+#   (a) The LOOP is the central construct. This is not a map over a
+#       known list (flow #4 research) or a fold over a static set
+#       (flow #8 import). It is a WHILE LOOP with EVOLVING STATE
+#       (current_draft, accumulated cost, iteration count, history)
+#       and a TERMINATION PREDICATE (quality met OR any budget axis
+#       hit). The language has no construct for this. Same gap as
+#       flow #5 debate-rounds (bounded loop with consensus
+#       predicate), but here the predicate is quality-driven, not
+#       consensus-driven. Two distinct domains demanding the
+#       while-loop primitive within 18 flows.
+#
+#   (b) Each loop body is a small sub-flow. Generate is its own
+#       flow with its own prompt, its own retry, its own model
+#       selection. Critic is its own flow with its own
+#       grounding-data fetch. Refiner is its own flow with its own
+#       prompt that consumes the critic's structured feedback.
+#       Production refinement systems compose these — they don't
+#       inline them. Per the Reflective Loop pattern: "Critic Agent
+#       / Refiner Agent / Evaluator Agent" are explicitly named as
+#       independent roles. #7 sub-flow composition is the natural
+#       fit.
+#
+#   (c) Three independent budget axes terminate the loop. Quality
+#       met (correctness), cost exhausted (economics), iteration cap
+#       (safety against infinite-loop bugs). Each is a different
+#       SHAPE of termination — quality is a comparison against the
+#       latest critique; cost is an accumulating sum; iteration is a
+#       counter. None of these is expressible at the source level
+#       today: no `+=`, no `>= threshold` on accumulating state, no
+#       counter primitive.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow refine(RefinementRequest) -> RefinementResult {
+#     current = generate_initial(it.task)             # initial draft
+#     history = []
+#     budget_used_cents = current.cost_cents
+#     iterations = 0
+#     stopped_reason = ""
+#
+#     loop {
+#       critique = critic(current.text, it.principles, it.task)
+#       history = append(history, IterationStep {
+#         draft: current.text, critique, refined: ""
+#       })
+#
+#       if critique.score >= it.quality_threshold:
+#         stopped_reason = "quality_met"
+#         break
+#
+#       if budget_used_cents + critique.cost_cents >= it.budget_limit_cents:
+#         stopped_reason = "budget_exhausted"
+#         break
+#
+#       if iterations >= it.max_iterations:
+#         stopped_reason = "iter_cap"
+#         break
+#
+#       # refine, with error recovery if refiner fails:
+#       refined = try refine_with_critique(current.text, critique, it.task)
+#                 catch _ -> {
+#                   stopped_reason = "refiner_failed"
+#                   break
+#                 }
+#
+#       current = refined
+#       budget_used_cents += critique.cost_cents + refined.cost_cents
+#       iterations += 1
+#       history[size(history)-1].refined = refined.text   # update last entry
+#
+#       emit_progress(it.session_id, iterations, critique.score, current)
+#     }
+#
+#     RefinementResult {
+#       final_draft:        current.text,
+#       final_score:        critique.score,
+#       iteration_count:    iterations,
+#       stopped_reason,
+#       total_cost_cents:   budget_used_cents,
+#       history
+#     }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #4   loops / fold — THE central gap. This is a WHILE
+#                 LOOP with stateful accumulation and a termination
+#                 predicate. Not the same shape as `map(xs, f)` —
+#                 there is no input list; the loop generates state
+#                 from prior state. The closest existing flow with
+#                 this shape is #5 loan debate-rounds. After two
+#                 distinct domains (consensus building, quality
+#                 refinement), the while-loop is established as a
+#                 SECOND sub-shape of #4 — distinct from map/reduce
+#                 over a list. Recommend Friday split: 4a map-fold
+#                 over list, 4b while-loop-with-state.
+#
+#   blocked: #5   conditional binding — refine ONLY if critique
+#                 below threshold; break ONLY on termination
+#                 predicate; emit_progress conditional on streaming
+#                 enabled.
+#
+#   blocked: #1   multi-branch routing — stopped_reason dispatch
+#                 (quality_met / budget_exhausted / iter_cap /
+#                 refiner_failed) with per-reason follow-up actions.
+#
+#   blocked: #3   in-source error handling — refiner timeout /
+#                 critic timeout → break with appropriate
+#                 stopped_reason, return what we have. Recovery
+#                 form for individual failures; accumulation form
+#                 for "failed iterations" list.
+#
+#   blocked: #6   streaming / partial results — FIFTH organic
+#                 corpus occurrence. Each iteration emits progress;
+#                 UIs render draft N alongside critique N as it
+#                 happens. With #6 now at five distinct organic
+#                 occurrences plus the dedicated stress test #20,
+#                 streaming is comprehensively load-bearing. The
+#                 single-return-value model is wrong for any flow
+#                 that runs longer than ~5 seconds.
+#
+#   blocked: #7   sub-flow composition — generate, critic, refine
+#                 are three independently-authored sub-flows. The
+#                 Reflective Loop pattern explicitly names them as
+#                 separate agents. Today they collapse into tools
+#                 inside one mega-tool.
+#
+#   blocked: #8   string / numeric EXPRESSION OPS — fifth corpus
+#                 occurrence. The cost-accumulation arithmetic
+#                 (`budget_used += critique.cost + refined.cost`)
+#                 is unwritable; the iteration counter increment
+#                 (`iterations += 1`) is unwritable; the quality
+#                 comparison against threshold is technically
+#                 writable only via where-predicate-on-list (not
+#                 against a bare value). At five occurrences across
+#                 five distinct domains the gap is plainly general.
+#
+#   blocked: #10  optional types — final_score absent if no
+#                 iteration completed; refined empty until that
+#                 iteration's refine step ran; failure_reason
+#                 absent on success.
+#
+#   blocked: #11  sum types / variants — EIGHTH corpus occurrence.
+#                 Stopped-reason is a variant carrying different
+#                 fields per kind: QualityMet{final_score},
+#                 BudgetExhausted{spent_cents},
+#                 IterCap{at: int},
+#                 RefinerFailed{error, partial_draft}.
+#                 IterationStep is also variant-shaped: an early
+#                 step has draft + critique but no `refined`; the
+#                 last step before quality-met has all three. Same
+#                 fat-record workaround as flows #10, #12, #13,
+#                 #14, #15, #16, #17.
+#
+#   blocked: #12  time / scheduling — 12a deadlines: hard wall-
+#                 clock budget on the whole refinement; per-
+#                 iteration timeout. Possible 12b if the loop pauses
+#                 for human approval between iterations (Anthropic's
+#                 "pause for human feedback at checkpoints").
+#
+#   blocked: #13  Other: MANDATORY SIDE EFFECTS (promoted to slot
+#                 #17 at flow #17) — emit_progress fires every
+#                 iteration; cost-accounting writes every iteration;
+#                 audit trail of each (draft, critique, refined)
+#                 trio.
+#
+#   blocked: #13  Other: SIDE-EFFECT IDEMPOTENCY — second
+#                 occurrence (first at flow #17). If a long
+#                 refinement is interrupted and resumed, iteration
+#                 N's side effects (progress emit, cost-account
+#                 write, audit-log entry) must not fire again. The
+#                 critic and refiner calls themselves are
+#                 expensive — re-running them on resume re-spends
+#                 cost the user budgeted once. Two occurrences in
+#                 two distinct domains; watch flow #19
+#                 (recursive_decomposition) and flow #20 (streaming)
+#                 for promotion threshold.
+#
+#   blocked: #14  lazy / short-circuit evaluation — thirteenth
+#                 occurrence. Refiner skipped if critique already
+#                 passes; remaining iterations skipped on budget
+#                 hit; the very expensive critic itself may be
+#                 short-circuited on the first iteration if the
+#                 initial draft scores high. Three forms of skip
+#                 in one flow.
+#
+#   blocked: #15  list-literal construction — eleventh occurrence.
+#                 history list starts empty `[]` and accumulates
+#                 IterationStep entries; same gap as flow #17.
+#                 Empty-list literal is the specific case here.
+#                 RECORD UPDATE syntax is a closely related gap —
+#                 `history[size(history)-1].refined = refined.text`
+#                 is unwritable. Worth tracking as a sub-finding
+#                 under #15.
+#
+#   blocked: #16  aggregation primitives — ninth occurrence.
+#                 sum of per-iteration costs; size of history;
+#                 max score across iterations; append-to-history
+#                 fold.
+#
+#   blocked: #13  Other: no string literals — stopped_reason enum,
+#                 principle IDs, model names.
+#
+#   shippable: N — the workflow that compiles below is one tool
+#                  that internally runs the loop. The source is
+#                  three lines that say nothing about how
+#                  refinement happens. A safety researcher reading
+#                  this Flow to understand "how does the system
+#                  prevent infinite refinement loops?" cannot get
+#                  an answer from the source. For a domain where
+#                  infinite-loop bugs are the #1 production
+#                  failure mode (every refinement-system blog post
+#                  warns about it), the policy must be auditable in
+#                  the workflow source. It is not.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: a single iterative-refinement tool that hides the
+# entire loop, the cost accounting, the termination logic, and the
+# history accumulation.
+
+type RefinementRequest = { session_id:         string,
+                         task:               string,
+                         principles:         [string],
+                         quality_threshold:  float,
+                         max_iterations:     int,
+                         budget_limit_cents: int }
+
+type IterationStep     = { iteration:   int,
+                         draft:       string,
+                         critique:    string,
+                         score:       float,
+                         refined:     string,
+                         cost_cents:  int }
+
+type RefinementResult  = { final_draft:      string,
+                         final_score:      float,
+                         iteration_count:  int,
+                         stopped_reason:   string,
+                         total_cost_cents: int,
+                         history:          [IterationStep] }
+
+tool generate_initial      (task: string)                    -> string
+  effect model("generate-v1")
+tool iteratively_refine    (initial_draft:     string,
+                            task:              string,
+                            principles:        [string],
+                            quality_threshold: float,
+                            max_iterations:    int,
+                            budget_limit_cents: int,
+                            session_id:        string)        -> RefinementResult
+  effect model("refine-v1")
+
+flow refine(RefinementRequest) -> RefinementResult {
+  # awkward: initial draft generated separately, then handed to the
+  # iteration engine. Exposes one stage of structure; everything
+  # else is hidden.
+  draft = generate_initial(it.task)
+
+  # workaround: the entire loop — per-iteration critique + refine
+  # calls, cost accumulation, three-axis termination predicate,
+  # history-list construction, progress streaming, side-effect
+  # idempotency on resume — collapses into one tool. The source
+  # cannot answer any audit question about the refinement policy.
+  result = iteratively_refine(draft, it.task, it.principles,
+                              it.quality_threshold, it.max_iterations,
+                              it.budget_limit_cents, it.session_id)
+
+  result
+}

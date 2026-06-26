@@ -1,0 +1,28 @@
+# onboarding.flow — a loan-onboarding decision exercising all three
+# non-pure effect levels:
+#   fetch_credit    deterministic  (external lookup, no side effects)
+#   assess_risk     model          (LLM underwriting judgment)
+#   notify_applicant mutation       (sends an email)
+#
+# The flow's own logic (binding the steps, field access) runs in-engine;
+# the host supplies the tool implementations. See onboarding.py / onboarding.ts.
+
+type Applicant     = { id: string, email: string, amount: int }
+type CreditReport  = { score: int, history_years: int }
+type RiskDecision  = { approve: bool, band: string, rationale: string }
+
+tool fetch_credit(id: string) -> CreditReport
+  effect deterministic
+
+tool assess_risk(report: CreditReport, amount: int) -> RiskDecision
+  effect model("claude-underwriter-v1")
+
+tool notify_applicant(email: string, band: string) -> bool
+  effect mutation
+
+flow onboard(Applicant) -> RiskDecision {
+  report   = fetch_credit(it.id)
+  decision = assess_risk(report, it.amount)
+  sent     = notify_applicant(it.email, decision.band)
+  decision
+}

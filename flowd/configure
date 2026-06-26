@@ -1,0 +1,247 @@
+#!/bin/sh
+#
+# configure — probe the local environment and generate config.mk.
+#
+# Conformant to POSIX.1-2008 shell. Run before `make`. The
+# Makefile does not invoke configure; configure is a manual step
+# performed once after checkout and again whenever the build
+# environment changes.
+#
+# Follows the layered model of Joe Nelson's "Tips for stable and
+# portable software": probe what the toolchain actually supports
+# rather than guess from `uname`.
+
+set -u
+
+# ---------------------------------------------------------------------------
+# Toolchain overrides, in the autoconf convention:
+#
+#     CC=clang CFLAGS=-O2 ./configure
+#
+# Whatever the probes below accept is recorded verbatim in config.mk,
+# so the compiler `make` runs is exactly the compiler configure
+# probed — the result must not depend on PATH ordering at build time.
+# ---------------------------------------------------------------------------
+CC=${CC:-cc}
+CFLAGS=${CFLAGS:-}
+CPPFLAGS=${CPPFLAGS:-}
+LDFLAGS=${LDFLAGS:-}
+
+# ---------------------------------------------------------------------------
+# compiles() — probe whether a C source snippet compiles (and optionally
+# links). The optional third argument is appended to the cc invocation
+# AFTER the source filename so it acts as link flags (e.g. "-lcrypto").
+#
+# Usage: compiles "<cc flags>" "<C source>" ["<link flags>"]
+# Returns 0 on success, non-zero on failure. Writes nothing on
+# either path.
+# ---------------------------------------------------------------------------
+compiles() {
+    _stage=`mktemp -d 2>/dev/null` || {
+        echo 'configure: error: mktemp -d failed' >&2
+        exit 1
+    }
+    _ldflags=""
+    if [ $# -ge 3 ]; then
+        _ldflags=$3
+    fi
+    echo "$2" > "$_stage/test.c"
+    # shellcheck disable=SC2086
+    "$CC" -Werror $CFLAGS $CPPFLAGS $1 -o "$_stage/test" "$_stage/test.c" $LDFLAGS $_ldflags >/dev/null 2>&1
+    _rc=$?
+    rm -rf "$_stage"
+    return $_rc
+}
+
+# ---------------------------------------------------------------------------
+# Required toolchain
+# ---------------------------------------------------------------------------
+
+echo 'configure: probing toolchain...'
+
+if ! command -v "$CC" >/dev/null 2>&1; then
+    echo "configure: error: no \`$CC\` on PATH (set CC=... to override)" >&2
+    exit 1
+fi
+
+# C99-capable compiler that accepts the strict flags.
+if ! compiles "-std=c99 -pedantic" '
+#include <stddef.h>
+int main(void) {
+    for (size_t i = 0; i < 1; i++) { (void)i; }  /* C99: decl in for */
+    return 0;
+}
+'; then
+    echo "configure: error: $CC does not accept -std=c99 -pedantic" >&2
+    exit 1
+fi
+echo "  cc:           ok ($CC, C99 + -pedantic)"
+
+# POSIX.1-2008. flowd writes its trace, value, and IR output through
+# open_memstream, standardized in POSIX 2008. (fmemopen is used by
+# flowc, not flowd, so it is not probed here.)
+if ! compiles "-std=c99 -pedantic -D_POSIX_C_SOURCE=200809L" '
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) {
+    char  *buf = NULL;
+    size_t sz  = 0;
+    FILE *f = open_memstream(&buf, &sz);
+    (void)f;
+    free(buf);
+    return 0;
+}
+'; then
+    echo 'configure: error: open_memstream is required (POSIX.1-2008)' >&2
+    exit 1
+fi
+echo '  posix:        ok (POSIX.1-2008 open_memstream)'
+
+# OpenSSL libcrypto for SHA-256 over canonical value bytes. We probe
+# header + link; if either fails the runtime cannot produce content
+# addresses and we refuse to proceed.
+#
+# macOS ships a deprecated stub libcrypto in /usr/lib but the modern
+# headers live under Homebrew. We try plain link first and fall back
+# to Homebrew's standard prefixes for include/lib paths.
+CONFIG_CRYPTO_CPPFLAGS=""
+CONFIG_CRYPTO_LDLIBS="-lcrypto"
+if compiles "-std=c99 -pedantic" '
+#include <openssl/sha.h>
+int main(void) {
+    unsigned char out[32];
+    SHA256((const unsigned char*)"hi", 2, out);
+    return out[0] == 0;
+}
+' "-lcrypto"; then
+    echo '  libcrypto:    ok (system)'
+else
+    _found=""
+    for _prefix in /opt/homebrew/opt/openssl@3 /usr/local/opt/openssl@3 \
+                   /opt/homebrew/opt/openssl     /usr/local/opt/openssl; do
+        if [ -f "$_prefix/include/openssl/sha.h" ]; then
+            if compiles "-std=c99 -pedantic -I$_prefix/include" '
+#include <openssl/sha.h>
+int main(void) {
+    unsigned char out[32];
+    SHA256((const unsigned char*)"hi", 2, out);
+    return out[0] == 0;
+}
+' "-L$_prefix/lib -lcrypto"; then
+                CONFIG_CRYPTO_CPPFLAGS="-I$_prefix/include"
+                CONFIG_CRYPTO_LDLIBS="-L$_prefix/lib -lcrypto"
+                _found=$_prefix
+                break
+            fi
+        fi
+    done
+    if [ -z "$_found" ]; then
+        echo 'configure: error: OpenSSL libcrypto with SHA256 is required' >&2
+        echo 'configure: error: install via your package manager (e.g. brew install openssl@3)' >&2
+        exit 1
+    fi
+    echo "  libcrypto:    ok ($_found)"
+fi
+
+# libcurl. The first piece of v1 that links libcurl is the Anthropic
+# provider adapter; the rest of the runtime works without
+# it. We probe at configure time so builds without libcurl produce
+# a clear error rather than a confusing link failure deep into the
+# build. Prefer curl-config if available; fall back to a header probe.
+CONFIG_CURL_CPPFLAGS=""
+CONFIG_CURL_LDLIBS=""
+if command -v curl-config >/dev/null 2>&1; then
+    CONFIG_CURL_CPPFLAGS=`curl-config --cflags 2>/dev/null`
+    CONFIG_CURL_LDLIBS=`curl-config --libs 2>/dev/null`
+fi
+if ! compiles "-std=c99 -pedantic $CONFIG_CURL_CPPFLAGS" '
+#include <curl/curl.h>
+int main(void) {
+    CURL *c = curl_easy_init();
+    if (c) curl_easy_cleanup(c);
+    return 0;
+}
+' "$CONFIG_CURL_LDLIBS"; then
+    _found=""
+    for _prefix in /opt/homebrew/opt/curl /usr/local/opt/curl; do
+        if [ -f "$_prefix/include/curl/curl.h" ]; then
+            if compiles "-std=c99 -pedantic -I$_prefix/include" '
+#include <curl/curl.h>
+int main(void) {
+    CURL *c = curl_easy_init();
+    if (c) curl_easy_cleanup(c);
+    return 0;
+}
+' "-L$_prefix/lib -lcurl"; then
+                CONFIG_CURL_CPPFLAGS="-I$_prefix/include"
+                CONFIG_CURL_LDLIBS="-L$_prefix/lib -lcurl"
+                _found=$_prefix
+                break
+            fi
+        fi
+    done
+    if [ -z "$_found" ]; then
+        echo 'configure: error: libcurl with HTTPS support is required' >&2
+        echo 'configure: error: install libcurl (brew install curl or apt-get install libcurl4-openssl-dev)' >&2
+        exit 1
+    fi
+    echo "  libcurl:      ok ($_found)"
+else
+    if [ -n "$CONFIG_CURL_LDLIBS" ]; then
+        echo "  libcurl:      ok (curl-config)"
+    else
+        CONFIG_CURL_LDLIBS="-lcurl"
+        echo '  libcurl:      ok (system)'
+    fi
+fi
+
+# Vendored cJSON 1.7.x. Compiles under the relaxed flag set the Makefile
+# uses for generated/third-party code. We probe with -w to confirm the
+# tree actually parses; the per-object rule keeps the relaxed flags
+# isolated from our own translation units.
+if [ ! -f src/cjson/cJSON.c ] || [ ! -f src/cjson/cJSON.h ]; then
+    echo 'configure: error: vendored cJSON missing under src/cjson/' >&2
+    exit 1
+fi
+_pwd=`pwd`
+if ! compiles "-std=c99 -w -I$_pwd/src/cjson" '
+#include "cJSON.h"
+int main(void) {
+    cJSON *j = cJSON_Parse("{\"k\":1}");
+    cJSON_Delete(j);
+    return 0;
+}
+' "$_pwd/src/cjson/cJSON.c"; then
+    echo 'configure: error: vendored cJSON did not compile cleanly' >&2
+    exit 1
+fi
+echo '  cjson:        ok (vendored 1.7.x)'
+
+# ---------------------------------------------------------------------------
+# Write config.mk
+# ---------------------------------------------------------------------------
+
+cat > config.mk <<EOF
+# config.mk
+#
+# GENERATED by ./configure. Re-run ./configure to regenerate.
+# Do not edit by hand: edits are lost on re-configure.
+
+CC      = $CC
+
+# Strict flags applied to our own code, followed by any CFLAGS /
+# CPPFLAGS / LDFLAGS given to configure. -Werror is on because in a
+# small codebase every warning indicates something to fix.
+CONFIG_CFLAGS   = -std=c99 -pedantic -Wall -Wextra -Werror $CFLAGS
+CONFIG_CPPFLAGS = -D_POSIX_C_SOURCE=200809L -Isrc $CONFIG_CRYPTO_CPPFLAGS $CONFIG_CURL_CPPFLAGS $CPPFLAGS
+CONFIG_LDFLAGS  = $LDFLAGS
+CONFIG_LDLIBS   = $CONFIG_CRYPTO_LDLIBS $CONFIG_CURL_LDLIBS
+
+# Relaxed flag set for third-party code we vendor verbatim (cJSON).
+# It is not our code and trips -Wpedantic; we isolate the build
+# flags rather than suppress warnings globally.
+CONFIG_GEN_CFLAGS = -std=c99 -w
+EOF
+
+echo 'configure: wrote config.mk'
+echo 'configure: run `make` to build flowd.'

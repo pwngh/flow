@@ -1,0 +1,363 @@
+# streaming_summary.flow — corpus flow #20 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Final shape stress test. This flow exists to surface the STREAMING
+# / PARTIAL-RESULTS shape: the consumer sees a sequence of typed
+# events arriving over time, not one return value at the end.
+#
+# Context-setting note before the friction marks: the rubric's
+# pre-prediction expected #6 (streaming) to surface in exactly ONE
+# flow — this one. It has actually surfaced ORGANICALLY in:
+#   flow #9   onboard_by_tier (activation events emit per step)
+#   flow #15  incident_response (searcher results stream to UI)
+#   flow #16  product_search (facet counts stream alongside hits)
+#   flow #17  long_running_research (per-step progress events)
+#   flow #18  iterative_refinement (per-iteration draft + critique)
+#   flow #19  recursive_decomposition (tree fills in left-to-right)
+# Six organic occurrences plus this dedicated stress is the
+# single most-undercounted prediction in the whole table.
+# Streaming is not a niche shape; it is the default shape for any
+# flow longer than ~5 seconds.
+#
+# Shape source: Anthropic streaming API (SSE; named events:
+# message_start, content_block_start with tool_use type,
+# content_block_delta with partial_json chunks, content_block_stop;
+# dual-path architecture — accumulator path with mutable snapshot,
+# builder path with immutable typed events). OpenAI streaming
+# (tool-call deltas, finish reasons, SSE protocol). Perplexity's
+# real-time UX (text streams; citation markers `[1]`, `[2]` inline;
+# source URLs arrive in `search_results` output items as discovered).
+#
+# A streaming-summary workflow has this shape:
+#
+#   open stream      consumer opens an SSE connection
+#                    server begins computing the answer
+#
+#   emit deltas      as each token / chunk / typed event becomes
+#                    available, server EMITS it to the consumer
+#                    consumer renders as deltas arrive
+#                    events are typed:
+#                      ContentDelta {text}
+#                      ToolCall {name, partial_json}
+#                      CitationDiscovered {marker, source_url}
+#                      Usage {tokens_so_far}
+#                      MessageStop {finish_reason}
+#                      Error {message, recoverable}
+#                    (these are precisely the SSE events Anthropic
+#                     and OpenAI ship — direct evidence the variant
+#                     case is the production case)
+#
+#   backpressure     consumer may be slow (network, render);
+#                    producer checks write-buffer drain, waits
+#                    when downstream is full
+#
+#   cancellation     consumer can abort mid-stream:
+#                      "if the model goes off-track, the user or
+#                       code can abort mid-stream, and without
+#                       streaming you pay for the full generation
+#                       whether you use it or not"
+#                    server stops computing AND BILLING
+#
+#   mid-stream err   model errors after partial output already sent:
+#                      what about the bytes the consumer has?
+#                      what about already-cited sources?
+#                      cleanup semantics matter
+#
+#   close            terminal event arrives:
+#                      MessageStop {finish_reason}: "stop" |
+#                                                   "max_tokens" |
+#                                                   "tool_use" |
+#                                                   "error"
+#                    consumer ends the stream
+#
+# Three load-bearing facts:
+#
+#   (a) The RETURN TYPE is wrong. Flow today says `flow X(I) -> O`
+#       returns ONE value of type O at the end. Streaming says
+#       `flow X(I) -> Stream<Event>` emits MANY values of type
+#       Event over time. This is not a syntax adjustment — it is a
+#       different runtime model. Generator-shaped flows do not
+#       compose with regular flows the same way; the runtime must
+#       support yield-and-suspend. LangGraph, Anthropic SDK, OpenAI
+#       SDK all expose streaming as a FIRST-CLASS feature with its
+#       own type discipline. Flow does not, and the prediction
+#       table missed how often this matters.
+#
+#   (b) Events are STRUCTURALLY VARIANT, mirroring the sum-type
+#       finding of flows #10/#12/#13/#14/#15/#16/#17/#18/#19. The
+#       SSE event types Anthropic ships (message_start,
+#       content_block_delta, content_block_stop, etc.) are an
+#       industry-standard variant — every other model provider has
+#       the same shape. Encoding as a fat record with `kind:
+#       string` plus all possible payload fields (tool_name,
+#       partial_json, citation_marker, citation_url, usage_tokens,
+#       finish_reason, error_message, error_recoverable) is the
+#       same fat-record workaround as 9 prior flows. The case for
+#       #11 sum types is now overwhelming.
+#
+#   (c) Backpressure and cancellation are runtime concepts the
+#       language cannot reach. "Stop computing if the consumer
+#       cancels" is correctness — it prevents pay-for-unused-
+#       generation. "Wait for the consumer to catch up" is also
+#       correctness — it prevents memory blowout on slow clients.
+#       Both are properties of the *channel* between flow and
+#       consumer, not of any binding inside the flow body. Today
+#       there is no channel — the consumer of a Flow result is
+#       outside the language entirely. To support streaming, the
+#       language has to admit that flows have consumers and that
+#       the consumer's state matters during execution.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today — uses generator-
+# shaped return and event-typed emission):
+#
+#   flow stream_answer(StreamRequest) -> Stream<StreamEvent> {
+#     # initial retrieval (may itself stream sources as they're found):
+#     sources = retrieve_with_streaming_emit(it.query)
+#       on each Source s ->
+#         yield CitationDiscovered { marker: s.marker, url: s.url }
+#
+#     # main generation loop — each LLM chunk is forwarded:
+#     for chunk in generate_stream(it.query, sources, it.max_tokens):
+#       match chunk {
+#         TextDelta {text} ->
+#           if it.cancelled():
+#             yield MessageStop { finish_reason: "cancelled" }
+#             return
+#           yield ContentDelta {text}
+#         ToolCallDelta {name, partial_json} ->
+#           yield ToolCall {name, partial_json}
+#         UsageUpdate {tokens} ->
+#           yield Usage {tokens_so_far: tokens}
+#         FinishReason {reason} ->
+#           yield MessageStop {finish_reason: reason}
+#       }
+#       check_backpressure_and_drain()
+#
+#     # post-stream cleanup is implicit; consumer received MessageStop.
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #6   streaming / partial results — PREDICTED. SEVENTH
+#                 corpus appearance (six organic + this dedicated
+#                 stress). The pre-prediction had it at 1. With
+#                 seven occurrences across seven distinct domains
+#                 (onboarding, incidents, product search, long
+#                 research, refinement, decomposition, dedicated
+#                 stream), #6 is the single most-undercounted
+#                 construct in the prediction table. The Friday
+#                 verdict should treat #6 as confirmed load-bearing
+#                 by the corpus, not by the stress test.
+#
+#                 The CORE GAP is the runtime model: `flow X(I) ->
+#                 O` returns one O. Streaming wants `flow X(I) ->
+#                 Stream<Event>` emitting many Events. This is a
+#                 RUNTIME SEMANTICS gap, parallel in scope to the
+#                 #12f durable-execution gap from flow #17. Both
+#                 ask the language to admit that flows have a
+#                 dimension beyond input → return: time, channel,
+#                 and consumer state.
+#
+#   blocked: #11  sum types / variants — TENTH corpus occurrence.
+#                 SSE event types are the canonical variant case.
+#                 Every other model provider ships the same shape:
+#                 ContentDelta, ToolCall, Citation, Usage,
+#                 MessageStop, Error. Encoding as `kind: string`
+#                 plus a fat record with all possible payload
+#                 fields is the same workaround applied across
+#                 disputes (#10), gates (#12), RAG sources (#13),
+#                 KYC docs (#14), incidents (#15), merchandising
+#                 (#16), checkpointed tasks (#17), refinement
+#                 steps (#18), decomposition results (#19), and
+#                 now stream events. Ten distinct domains. The case
+#                 for #11 is no longer a recommendation; it is
+#                 corpus-evident.
+#
+#   blocked: #13  Other: BACKPRESSURE / CHANNEL SEMANTICS. NEW
+#                 candidate, surfaces only at flow #20. The
+#                 language has no notion of a channel between flow
+#                 and consumer; therefore no way to express
+#                 "the consumer is slow, wait." OpenAI / Anthropic
+#                 SDKs and the SSE spec treat this as required for
+#                 correctness. Since #20 is the only flow that
+#                 needed it, do not promote on count alone — but
+#                 record it for any future streaming-language
+#                 design pass.
+#
+#   blocked: #13  Other: CANCELLATION / EARLY-ABORT. Related but
+#                 distinct from backpressure. The consumer aborts;
+#                 the producer must (a) stop computing, (b) stop
+#                 billing, (c) emit a final MessageStop with
+#                 finish_reason: "cancelled" so the consumer
+#                 knows the cleanup completed. Three separate
+#                 obligations, none expressible in current Flow.
+#                 Same "channel between flow and consumer"
+#                 question. Pair with backpressure as the
+#                 channel-semantics gap.
+#
+#   blocked: #3   in-source error handling — mid-stream errors
+#                 have nowhere to go in current Flow. The flow
+#                 returns one value; if generation errors after
+#                 100 tokens already emitted, the caller has
+#                 received those tokens already. There is no
+#                 "rollback the stream" semantic. The variant
+#                 Error event is the production answer
+#                 (Anthropic, OpenAI both emit it as a terminal
+#                 SSE event) — but the variant gap (#11) blocks
+#                 even that workaround.
+#
+#   blocked: #14  lazy / short-circuit evaluation — fifteenth
+#                 corpus occurrence. Stop generation on
+#                 cancellation. The producer must NOT continue
+#                 computing tokens past the cancel signal.
+#                 Different motivation again: not cost-driven
+#                 (#3/#6/#7), not policy-correctness (#9), not
+#                 fail-fast (#12), but EXTERNAL-EVENT-DRIVEN.
+#                 Four documented motivations for #14 now —
+#                 strengthens the case that the primitive is
+#                 general.
+#
+#   blocked: #18  (PROMOTED at flow #19) SIDE-EFFECT IDEMPOTENCY.
+#                 Fourth occurrence. If a streaming flow is
+#                 interrupted and resumed (rare but possible with
+#                 server failover), already-emitted events must
+#                 not re-emit to the consumer. The "exactly-once
+#                 emission" guarantee is the same gap as flows
+#                 #17 (checkpoint writes), #18 (per-iteration
+#                 emits), #19 (per-node spawn). At four
+#                 occurrences across four domains, #18 is solidly
+#                 load-bearing.
+#
+#   blocked: #17  (PROMOTED at flow #17) MANDATORY SIDE EFFECTS.
+#                 Sixth occurrence. Each event-emit is mandatory
+#                 once it has been generated; the language has no
+#                 way to express the emit IS the return.
+#
+#   blocked: #12  time / scheduling — 12a per-chunk deadlines
+#                 (if a model produces no token for 30s, terminate
+#                 the stream); 12b pause-and-resume across
+#                 connection drops (resume from last sequence
+#                 number).
+#
+#   blocked: #1   multi-branch routing — per-event-kind dispatch
+#                 inside the generator body; finish-reason
+#                 dispatch (stop / max_tokens / tool_use /
+#                 error / cancelled).
+#
+#   blocked: #5   conditional binding — emit ONLY if event passes
+#                 content filter; emit citation ONLY when source
+#                 retrieval has resolved; cancellation check
+#                 conditional on consumer-state input.
+#
+#   blocked: #7   sub-flow composition — sub-streams from
+#                 sub-flows (retrieval emits CitationDiscovered
+#                 events that flow through to the main stream).
+#                 Stream composition is a language feature in
+#                 streaming-first systems (RxJS, Kotlin Flow,
+#                 Java Streams) that Flow has no analogue for.
+#
+#   blocked: #4   loops / fold over list — 4a generator loop:
+#                 `for chunk in generate_stream(...)` is an
+#                 iterator-style consumption that the language
+#                 cannot express. This is a third sub-shape of
+#                 #4: not "map over a known list" (4a flow #4)
+#                 and not "while with state" (4b flow #18), but
+#                 "iterate over an INCOMING STREAM." Worth
+#                 tracking as #4c if streaming gains language
+#                 support.
+#
+#   blocked: #10  optional types — citation_url absent on text
+#                 deltas; tool_name absent on content deltas;
+#                 finish_reason absent until MessageStop. Every
+#                 event variant has a non-overlapping field set.
+#                 #11 (variants) is the right fix; #10 is a
+#                 symptom.
+#
+#   blocked: #8   string / numeric expression ops — token counting,
+#                 byte-accounting for SSE framing, cost
+#                 accumulation per stream. Seventh corpus
+#                 occurrence (across seven distinct domains).
+#
+#   blocked: #15  list-literal construction — thirteenth
+#                 occurrence. Accumulating event history;
+#                 buffered events on backpressure.
+#
+#   blocked: #16  aggregation primitives — eleventh occurrence.
+#                 Fold events into the final summary text; collect
+#                 cited sources across the stream; count tokens.
+#
+#   blocked: #13  Other: no string literals — event kinds, finish
+#                 reasons. Recurring.
+#
+#   shippable: N — the workflow that compiles below BATCHES every
+#                  event into a list and returns it at the end.
+#                  This is not streaming; it is the opposite of
+#                  streaming. A consumer receiving the result
+#                  gets all the events at once after the entire
+#                  generation has completed — exactly the
+#                  behaviour streaming exists to avoid. The
+#                  "[StreamEvent]" return type is the maximum-
+#                  degenerate workaround; the runtime model
+#                  cannot do anything else. This stub is correct
+#                  for any consumer that doesn't care about
+#                  intermediate output, which is to say: not a
+#                  streaming consumer.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: generate the entire response, batch all events
+# into a list, return the list. The fundamental streaming property
+# (real-time emission) is lost.
+
+type StreamRequest = { session_id: string,
+                     query:      string,
+                     max_tokens: int }
+
+type StreamEvent   = { kind:               string,
+                     sequence_number:    int,
+                     text_delta:         string,
+                     token_index:        int,
+                     tool_name:          string,
+                     partial_json:       string,
+                     citation_marker:    string,
+                     citation_url:       string,
+                     usage_tokens:       int,
+                     finish_reason:      string,
+                     error_message:      string,
+                     error_recoverable:  bool }
+
+type StreamResult  = { session_id:   string,
+                     events:       [StreamEvent],
+                     final_text:   string,
+                     total_tokens: int,
+                     status:       string,
+                     finished_at:  int }
+
+tool generate_response_stream  (query:      string,
+                                max_tokens: int,
+                                session_id: string)         -> [StreamEvent]
+  effect model("stream-gen-v1")
+
+tool finalize_response         (events: [StreamEvent])      -> StreamResult
+  effect pure
+
+flow stream_answer(StreamRequest) -> StreamResult {
+  # workaround: this should EMIT events one at a time as they are
+  # generated. Instead it returns a list of all events at the end.
+  # The consumer gets everything at once. Streaming is structurally
+  # absent — this is batched output with a list-shaped name.
+  # Counts toward #6 (the entire point of this flow), and toward
+  # every channel-semantics concern (backpressure, cancellation,
+  # mid-stream errors) which simply have nowhere to go in this
+  # return type.
+  events = generate_response_stream(it.query, it.max_tokens, it.session_id)
+
+  # workaround: the final-text aggregation is something the
+  # consumer would have done incrementally as deltas arrived;
+  # collapsing it into a post-hoc tool is fine for the batched
+  # case but is the wrong shape for the streaming case.
+  result = finalize_response(events)
+
+  result
+}

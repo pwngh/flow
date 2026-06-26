@@ -1,0 +1,11 @@
+type TaskState =
+  | Pending { task_id: string }
+  | Done { task_id: string }
+
+type ReviewState =
+  | Pending { review_id: string }
+  | Approved { review_id: string }
+
+flow start(string) -> TaskState {
+  Pending { task_id: it }
+}

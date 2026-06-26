@@ -1,0 +1,52 @@
+.TH FLOW 7 "May 2026" "" "Flow Manual"
+.SH NAME
+flow \- overview of the Flow toolchain
+.SH DESCRIPTION
+Flow is a small declarative language for typed agent workflows,
+a compiler that emits a JSON intermediate representation, and a
+runtime that executes the IR and writes a complete trace of every
+step.  The runtime supports
+.B model-versioned replay :
+re-executing a recorded decision against a different model with
+the originally captured inputs, producing a diff against the
+original outcome.
+.PP
+The system divides into three artifacts with three audiences.
+The DSL is what workflow authors write \(em
+.I .flow
+files describing tools, types, and pipelines.  The IR is the JSON
+intermediate representation the compiler emits and the runtime
+consumes \(em the durable contract between the two sides.  The
+runtime executes the IR and produces traces \(em the operational
+artifact that compliance reviewers and auditors read to
+reconstruct why a given decision came out the way it did.
+.SH COMPONENTS
+.TP
+.B flowc
+The compiler.  Reads a
+.I .flow
+source file, type-checks it, and emits a Flow IR document.
+.TP
+.B flowd
+The runtime.  Loads an IR document, registers tool and model
+implementations, executes flows, and writes traces.  Ships as a
+C99 library and a CLI handling flow execution, trace replay, and
+trace diffing.
+.SH FILES
+.TP
+.I *.flow
+Flow source files.
+.TP
+.I *.ir.json
+Flow IR documents emitted by the compiler.
+.TP
+.I traces/<flow>/<execution_id>/
+Per-execution trace directories written by the runtime.
+.SH STANDARDS
+The C components target ISO C99 against POSIX.1-2008.  The IR is
+byte-deterministic; the compiler honors
+.B SOURCE_DATE_EPOCH
+for the
+.B compiled_at
+field.  The runtime extends the contract: identical inputs against
+an identical runtime produce byte-identical traces.

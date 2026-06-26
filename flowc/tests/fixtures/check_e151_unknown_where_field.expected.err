@@ -1,0 +1,1 @@
+tests/fixtures/check_e151_unknown_where_field.flow:9:14: error[E151]: where predicate references unknown field 'nonexistent_field'

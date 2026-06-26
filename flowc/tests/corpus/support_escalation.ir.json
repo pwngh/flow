@@ -1,0 +1,177 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/support_escalation.flow",
+  "types": [
+    {
+      "name": "SupportRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "conversation_id", "type": "string"},
+        {"name": "customer_id", "type": "string"},
+        {"name": "message", "type": "string"},
+        {"name": "is_vip", "type": "bool"}
+      ]
+    },
+    {
+      "name": "Classification",
+      "kind": "record",
+      "fields": [
+        {"name": "category", "type": "string"},
+        {"name": "confidence", "type": "float"},
+        {"name": "sentiment", "type": "float"},
+        {"name": "urgency", "type": "int"},
+        {"name": "out_of_scope", "type": "bool"},
+        {"name": "asks_for_human", "type": "bool"}
+      ]
+    },
+    {
+      "name": "ReplyDraft",
+      "kind": "record",
+      "fields": [
+        {"name": "text", "type": "string"},
+        {"name": "sources", "type": "[string]"},
+        {"name": "confidence", "type": "float"}
+      ]
+    },
+    {
+      "name": "SupportResponse",
+      "kind": "record",
+      "fields": [
+        {"name": "outcome", "type": "string"},
+        {"name": "reply_text", "type": "string"},
+        {"name": "escalation_ticket_id", "type": "string"},
+        {"name": "requires_human", "type": "bool"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "classify_intent",
+      "input": [
+        {"name": "message", "type": "string"},
+        {"name": "customer_id", "type": "string"}
+      ],
+      "output": "Classification",
+      "effect": {
+        "level": "model",
+        "model": "classify-intent-v1"
+      }
+    },
+    {
+      "name": "generate_reply",
+      "input": [
+        {"name": "req", "type": "SupportRequest"},
+        {"name": "c", "type": "Classification"}
+      ],
+      "output": "ReplyDraft",
+      "effect": {
+        "level": "model",
+        "model": "generate-reply-v1"
+      }
+    },
+    {
+      "name": "dispatch_response",
+      "input": [
+        {"name": "req", "type": "SupportRequest"},
+        {"name": "c", "type": "Classification"},
+        {"name": "draft", "type": "ReplyDraft"}
+      ],
+      "output": "SupportResponse",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "handle_support",
+      "params": [
+        {"name": "it", "type": "SupportRequest", "implicit": true}
+      ],
+      "output": "SupportResponse",
+      "bindings": [
+        {
+          "name": "c",
+          "expr": {
+            "kind": "call",
+            "tool": "classify_intent",
+            "args": [
+              {
+                "field": "message",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "message"]
+                }
+              },
+              {
+                "field": "customer_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "customer_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "draft",
+          "expr": {
+            "kind": "call",
+            "tool": "generate_reply",
+            "args": [
+              {
+                "field": "req",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "c",
+                "value": {
+                  "kind": "path",
+                  "segments": ["c"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "response",
+          "expr": {
+            "kind": "call",
+            "tool": "dispatch_response",
+            "args": [
+              {
+                "field": "req",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "c",
+                "value": {
+                  "kind": "path",
+                  "segments": ["c"]
+                }
+              },
+              {
+                "field": "draft",
+                "value": {
+                  "kind": "path",
+                  "segments": ["draft"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["response"]
+      }
+    }
+  ]
+}

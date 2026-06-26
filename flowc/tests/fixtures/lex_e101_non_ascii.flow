@@ -1,0 +1,4 @@
+é
+flow gate(a: bool) -> bool {
+  a
+}

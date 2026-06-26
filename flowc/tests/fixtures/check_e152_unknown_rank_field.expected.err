@@ -1,0 +1,1 @@
+tests/fixtures/check_e152_unknown_rank_field.flow:8:8: error[E152]: rank clause references unknown field 'nope'

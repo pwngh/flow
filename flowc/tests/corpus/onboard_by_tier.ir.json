@@ -1,0 +1,311 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/onboard_by_tier.flow",
+  "types": [
+    {
+      "name": "OnboardingRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "user_id", "type": "string"},
+        {"name": "tier", "type": "string"},
+        {"name": "session_id", "type": "string"}
+      ]
+    },
+    {
+      "name": "User",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "email", "type": "string"},
+        {"name": "name", "type": "string"},
+        {"name": "role", "type": "string"},
+        {"name": "company_size", "type": "int"}
+      ]
+    },
+    {
+      "name": "Workspace",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "name", "type": "string"}
+      ]
+    },
+    {
+      "name": "IntegrationStatus",
+      "kind": "record",
+      "fields": [
+        {"name": "connected", "type": "bool"},
+        {"name": "provider", "type": "string"},
+        {"name": "skipped", "type": "bool"}
+      ]
+    },
+    {
+      "name": "SsoConfig",
+      "kind": "record",
+      "fields": [
+        {"name": "configured", "type": "bool"},
+        {"name": "idp_url", "type": "string"},
+        {"name": "skipped", "type": "bool"}
+      ]
+    },
+    {
+      "name": "CsmAssignment",
+      "kind": "record",
+      "fields": [
+        {"name": "assigned", "type": "bool"},
+        {"name": "csm_email", "type": "string"},
+        {"name": "skipped", "type": "bool"}
+      ]
+    },
+    {
+      "name": "OnboardingState",
+      "kind": "record",
+      "fields": [
+        {"name": "user_id", "type": "string"},
+        {"name": "tier", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "completed_steps", "type": "[string]"},
+        {"name": "next_step_id", "type": "string"},
+        {"name": "last_error", "type": "string"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_user",
+      "input": [
+        {"name": "user_id", "type": "string"}
+      ],
+      "output": "User",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "create_workspace",
+      "input": [
+        {"name": "user", "type": "User"},
+        {"name": "tier", "type": "string"}
+      ],
+      "output": "Workspace",
+      "effect": {
+        "level": "mutation"
+      }
+    },
+    {
+      "name": "setup_github_integration",
+      "input": [
+        {"name": "user", "type": "User"}
+      ],
+      "output": "IntegrationStatus",
+      "effect": {
+        "level": "mutation"
+      }
+    },
+    {
+      "name": "setup_sso",
+      "input": [
+        {"name": "user", "type": "User"},
+        {"name": "tier", "type": "string"}
+      ],
+      "output": "SsoConfig",
+      "effect": {
+        "level": "mutation"
+      }
+    },
+    {
+      "name": "assign_csm",
+      "input": [
+        {"name": "user", "type": "User"},
+        {"name": "tier", "type": "string"}
+      ],
+      "output": "CsmAssignment",
+      "effect": {
+        "level": "mutation"
+      }
+    },
+    {
+      "name": "init_state",
+      "input": [
+        {"name": "user", "type": "User"},
+        {"name": "tier", "type": "string"},
+        {"name": "workspace", "type": "Workspace"},
+        {"name": "gh", "type": "IntegrationStatus"},
+        {"name": "sso", "type": "SsoConfig"},
+        {"name": "csm", "type": "CsmAssignment"}
+      ],
+      "output": "OnboardingState",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "onboard",
+      "params": [
+        {"name": "it", "type": "OnboardingRequest", "implicit": true}
+      ],
+      "output": "OnboardingState",
+      "bindings": [
+        {
+          "name": "user",
+          "expr": {
+            "kind": "call",
+            "tool": "get_user",
+            "args": [
+              {
+                "field": "user_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "user_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "workspace",
+          "expr": {
+            "kind": "call",
+            "tool": "create_workspace",
+            "args": [
+              {
+                "field": "user",
+                "value": {
+                  "kind": "path",
+                  "segments": ["user"]
+                }
+              },
+              {
+                "field": "tier",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "tier"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "github",
+          "expr": {
+            "kind": "call",
+            "tool": "setup_github_integration",
+            "args": [
+              {
+                "field": "user",
+                "value": {
+                  "kind": "path",
+                  "segments": ["user"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "sso",
+          "expr": {
+            "kind": "call",
+            "tool": "setup_sso",
+            "args": [
+              {
+                "field": "user",
+                "value": {
+                  "kind": "path",
+                  "segments": ["user"]
+                }
+              },
+              {
+                "field": "tier",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "tier"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "csm",
+          "expr": {
+            "kind": "call",
+            "tool": "assign_csm",
+            "args": [
+              {
+                "field": "user",
+                "value": {
+                  "kind": "path",
+                  "segments": ["user"]
+                }
+              },
+              {
+                "field": "tier",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "tier"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "state",
+          "expr": {
+            "kind": "call",
+            "tool": "init_state",
+            "args": [
+              {
+                "field": "user",
+                "value": {
+                  "kind": "path",
+                  "segments": ["user"]
+                }
+              },
+              {
+                "field": "tier",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "tier"]
+                }
+              },
+              {
+                "field": "workspace",
+                "value": {
+                  "kind": "path",
+                  "segments": ["workspace"]
+                }
+              },
+              {
+                "field": "gh",
+                "value": {
+                  "kind": "path",
+                  "segments": ["github"]
+                }
+              },
+              {
+                "field": "sso",
+                "value": {
+                  "kind": "path",
+                  "segments": ["sso"]
+                }
+              },
+              {
+                "field": "csm",
+                "value": {
+                  "kind": "path",
+                  "segments": ["csm"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["state"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+type User = { id: string }
+type Plan = { id: string }
+
+tool make_plan() -> Plan
+  effect deterministic
+
+flow demo(User) -> User {
+  p = make_plan()
+  p
+}

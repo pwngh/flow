@@ -1,0 +1,6 @@
+Program tests/fixtures/dump_float_precision.flow
+  FlowDecl @1:1 f (implicit it)
+    Param @1:8 it : float
+    return-type: float
+    return:
+      Literal-Float @2:3 3.141592653

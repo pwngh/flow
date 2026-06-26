@@ -1,0 +1,1 @@
+tests/fixtures/resolve_e127_ambiguous_variant.flow:10:3: error[E127]: variant 'Pending' is ambiguous; qualify with the sum type

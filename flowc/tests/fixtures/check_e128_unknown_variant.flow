@@ -1,0 +1,6 @@
+type Hypothesis =
+  | DeployCaused { id: string }
+
+flow propose(string) -> Hypothesis {
+  Bogus { id: it }
+}

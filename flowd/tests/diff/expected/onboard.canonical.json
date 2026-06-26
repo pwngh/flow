@@ -1,0 +1,137 @@
+{
+  "flows": [
+    {
+      "name": "onboard",
+      "output": "OnboardResult",
+      "params": [
+        {
+          "implicit": true,
+          "name": "it",
+          "type": "SignupRequest"
+        }
+      ]
+    }
+  ],
+  "ir_version": "1.0",
+  "tools": [
+    {
+      "effect": {
+        "level": "deterministic"
+      },
+      "input": [
+        {
+          "name": "email",
+          "type": "string"
+        }
+      ],
+      "name": "create_user",
+      "output": "User"
+    },
+    {
+      "effect": {
+        "level": "deterministic"
+      },
+      "input": [
+        {
+          "name": "user",
+          "type": "User"
+        }
+      ],
+      "name": "propose_plans",
+      "output": "[Plan]"
+    }
+  ],
+  "types": [
+    {
+      "id": 1,
+      "kind": "primitive",
+      "name": "string"
+    },
+    {
+      "id": 2,
+      "kind": "primitive",
+      "name": "int"
+    },
+    {
+      "id": 3,
+      "kind": "primitive",
+      "name": "float"
+    },
+    {
+      "id": 4,
+      "kind": "primitive",
+      "name": "bool"
+    },
+    {
+      "fields": [
+        {
+          "name": "email",
+          "type": "string"
+        }
+      ],
+      "id": 100,
+      "kind": "record",
+      "name": "SignupRequest"
+    },
+    {
+      "fields": [
+        {
+          "name": "email",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "type": "string"
+        }
+      ],
+      "id": 101,
+      "kind": "record",
+      "name": "User"
+    },
+    {
+      "fields": [
+        {
+          "name": "cost",
+          "type": "int"
+        },
+        {
+          "name": "expected_value",
+          "type": "int"
+        },
+        {
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "name": "success_rate",
+          "type": "float"
+        }
+      ],
+      "id": 102,
+      "kind": "record",
+      "name": "Plan"
+    },
+    {
+      "fields": [
+        {
+          "name": "plan",
+          "type": "Plan"
+        },
+        {
+          "name": "user",
+          "type": "User"
+        }
+      ],
+      "id": 103,
+      "kind": "record",
+      "name": "OnboardResult"
+    },
+    {
+      "elem": "Plan",
+      "id": 1000,
+      "kind": "list",
+      "name": "[Plan]"
+    }
+  ],
+  "variant_index": []
+}

@@ -1,0 +1,401 @@
+# incident_response.flow — corpus flow #15 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: incident.io's AI SRE architecture (orchestration layer
+# managing "searcher checks" that execute in parallel and sequentially
+# across data sources: code changes via GitHub/GitLab, historical
+# incidents on the platform, Slack workspace messages, observability
+# data from Datadog/Grafana — logs, metrics, traces). PagerDuty AIOps
+# (Event Orchestration enriching events with runbooks + diagnostic
+# data BEFORE notification; SRE Agent surfacing triage analysis with
+# cited signals; recommendation citing the signals behind it).
+#
+# An incident-response workflow has this shape:
+#
+#   alert in       Pager fires (PagerDuty / Opsgenie / native)
+#                  payload: { alert_id, service_id, severity_hint,
+#                              fired_at }
+#
+#   dedupe         is this related to an active or recent incident?
+#                    yes → attach to the existing incident channel,
+#                          return — skip the rest
+#                    no  → continue
+#                  (canonical #14 short-circuit case: avoid the
+#                   expensive gather on duplicate pages)
+#
+#   triage         compute severity from service SLO + customer
+#                  impact + alert-source confidence
+#
+#   gather         PARALLEL searcher-checks across data sources:
+#                    recent deploys to affected service(s)
+#                    historical similar incidents (with resolutions)
+#                    Slack channels mentioning the service
+#                    error logs (last 30 min)
+#                    latency metrics (deviation from baseline)
+#                    distributed traces (slowest 5%)
+#                    dependency health
+#                    cloud-provider status page
+#                    recent config / infra changes
+#                    on-call schedule (who to page)
+#                    SLO burn-rate dashboards
+#                  10+ independent sources. Each may fail; partial
+#                  results acceptable. Same shape as flow #6 fraud
+#                  fanout but with 2× the leg count and accumulation-
+#                  style error handling instead of recovery.
+#
+#   hypothesise    LLM combines signals into a likely-cause
+#                  hypothesis:
+#                    DeployCaused {suspect_deploy_id, diff_url, ...}
+#                    CapacityIssue {resource, threshold_breached, ...}
+#                    DependencyFailure {service, error_signature, ...}
+#                    ConfigChange {change_id, ...}
+#                    DataIssue {table, lag_seconds, ...}
+#                    Unknown {confidence: low}
+#                  (canonical sum-type case — 5+ variants with
+#                   structurally different fields per kind)
+#
+#   runbook        match hypothesis to runbook library
+#                  returns RunbookSuggestion with cited signals
+#                  PagerDuty: "cites the signals and history behind
+#                              the recommendation"
+#
+#   create artifacts (MANDATORY SIDE EFFECTS — fire regardless of
+#                     return value or downstream success):
+#                    Slack channel
+#                    status page entry
+#                    page on-call
+#                    assign incident commander
+#                    record into incident-ledger DB
+#                  Second corpus occurrence of the mandatory-side-
+#                  effect shape (flow #14 KYC was first).
+#
+#   stream         emit context-arrival events to UI as each searcher
+#                  check returns; responders see information populate
+#                  in real time. The investigation is not "computed
+#                  once, returned"; it is "compute in stages, stream
+#                  partial results, refine."
+#
+#   long-running   incident lives for hours. New events (more pages,
+#                  customer reports, deploys during incident) re-fire
+#                  this flow or sibling flows, each appending context
+#                  to the same incident channel. Same pause-and-
+#                  resume / external-state shape as flow #9 onboard
+#                  but driven by paging events rather than user
+#                  steps.
+#
+#   resolve        when human marks incident resolved:
+#                    generate postmortem draft
+#                    propose follow-ups
+#                    update runbook library with what worked
+#                  (incident.io: "drafts postmortem, timeline,
+#                                  contributing factors, follow-ups")
+#
+# Three load-bearing facts:
+#
+#   (a) Parallel gather is the marquee case in this flow's domain.
+#       incident.io's documented architecture uses the exact phrase
+#       "execute in parallel across data sources." Without #2 the
+#       gather is the dominant wall-clock cost and the responder
+#       waits 30+ seconds before any context appears.
+#
+#   (b) Hypothesis is the canonical #11 sum-type case in operations.
+#       Each kind has structurally different evidence (a deploy-
+#       caused hypothesis cites a diff URL and commit author; a
+#       dependency failure cites an upstream-service error
+#       signature; a capacity issue cites a resource and threshold).
+#       This is the FIFTH corpus occurrence of variants (flows #10,
+#       #12, #13, #14, now #15) — at this point #11 is among the
+#       best-supported gaps in the corpus.
+#
+#   (c) The dedupe step is the cost-driven short-circuit case par
+#       excellence. Production incident systems see waves of
+#       related alerts ("our DB is down, every service paged at
+#       once"). Without dedupe, every alert runs the full gather +
+#       hypothesise + side-effects pipeline, multiplying the on-
+#       call interruption load by N. Tenth corpus occurrence of
+#       #14.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow respond_to_alert(IncidentAlert) -> IncidentDecision {
+#     # dedupe early-exit:
+#     dup = dedupe_check(it.alert_id, it.service_id, it.fired_at)
+#     if dup.matched:
+#       attach_to_incident(dup.incident_id, it)
+#       return IncidentDecision { kind: "attached", incident_id: dup.incident_id }
+#
+#     severity = triage_severity(it)
+#
+#     # parallel fan-out over a (variable-length) list of searchers:
+#     searchers = ["deploys", "history", "logs", "metrics", "traces",
+#                  "slack", "deps", "cloud_status", "infra_changes",
+#                  "on_call", "slo_burn"]
+#     results = map_parallel(searchers, s -> run_searcher(s, it))
+#
+#     # tolerate per-source failure (3b accumulation):
+#     usable     = filter(results, r -> r.ok)
+#     failed     = filter(results, r -> not r.ok)
+#     context = ContextBundle { signals: usable, partial: size(failed) > 0,
+#                               failed_sources: map(failed, f -> f.source) }
+#
+#     # hypothesise — returns a variant value:
+#     hypo = hypothesise(it, context)
+#     # match hypo {
+#     #   DeployCaused d  -> attach_diff_review(d.suspect_deploy_id)
+#     #   DependencyFailure df -> page_upstream_team(df.service)
+#     #   CapacityIssue ci -> propose_scale_up(ci.resource)
+#     #   ConfigChange cc  -> page_change_author(cc.change_id)
+#     #   ...
+#     # }
+#
+#     runbook = match_runbook(hypo)
+#
+#     # MANDATORY side effects — fire regardless:
+#     channel       = create_slack_channel(it.service_id, severity)
+#     status_entry  = update_status_page(it.service_id, severity, hypo)
+#     ic            = assign_incident_commander(severity, it.service_id)
+#     page          = page_on_call_if_severe(severity, it.service_id)
+#     persist_to_incident_ledger(it, severity, hypo, runbook, channel)
+#
+#     # stream partial results to UI as searchers return; updates fire
+#     # *during* the parallel gather, not after — true streaming, not
+#     # batch:
+#     emit_context_stream(it, results)
+#
+#     IncidentDecision { kind: "investigating",
+#                        severity, hypothesis: hypo,
+#                        runbook, channel: channel.url,
+#                        ic, partial: context.partial }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — severity dispatch (4-way),
+#                 hypothesis-kind dispatch (5+ variants with per-kind
+#                 follow-up actions), runbook-action dispatch (auto-
+#                 execute / require-approval / manual), dedupe-
+#                 attached vs new-incident outcome. Multiple
+#                 independent branching steps in one flow.
+#
+#   blocked: #2   parallel fan-out + join — PREDICTED. The textbook
+#                 case for this domain. incident.io's published
+#                 architecture explicitly names "parallel searcher
+#                 checks." 10+ sources serialised would push initial-
+#                 triage latency past 30 seconds, which is past the
+#                 useful window for SEV1 response.
+#
+#   blocked: #3   in-source error handling — PREDICTED. Three sub-
+#                 forms surface together:
+#                 3a recovery: cloud-status API down → use cached
+#                 3b accumulation: collect per-searcher failures
+#                                  into the context's failed_sources
+#                                  list (responders see "metrics:
+#                                  ok / logs: timeout / traces: ok")
+#                 3c (from flow #14) mandatory retry: NOT here —
+#                                  in incident response, missing
+#                                  data is acceptable, partial is
+#                                  better than nothing.
+#                 The two sub-forms relevant here are 3a + 3b.
+#
+#   blocked: #4   loops / fold over list — map over searcher names
+#                 (variable arity), map over affected services
+#                 (multi-service incidents), fold context-bundle
+#                 results, filter usable vs failed.
+#
+#   blocked: #5   conditional binding — dedupe early-exit; auto-
+#                 remediation only if confidence high AND severity ≤
+#                 a threshold AND runbook is approved-for-auto;
+#                 page-on-call only on SEV ≥ 2; postmortem only after
+#                 resolved.
+#
+#   blocked: #6   streaming / partial results — SECOND corpus
+#                 occurrence outside flow #20. The investigation is
+#                 a stream — context populates the UI as searchers
+#                 return, not as a single batch after all complete.
+#                 incident.io's interface shows individual checks
+#                 going green/red in real time. The single-return-
+#                 value model cannot express "emit progress at this
+#                 step." (First non-stress-test occurrence was flow
+#                 #9 activation events; this is the second.)
+#
+#   blocked: #7   sub-flow composition — PREDICTED. Each searcher
+#                 (deploys, logs, metrics, traces, slack, etc.) is a
+#                 small flow on its own — its own data source, its
+#                 own error semantics, its own normalisation. They
+#                 want to be flows the platform team can author
+#                 independently and the orchestration composes.
+#                 Today they must be tools, which means a new
+#                 searcher requires editing the gather tool.
+#
+#   blocked: #8   string / numeric expression ops — third corpus
+#                 occurrence (flows #11 scheduling, #13 RAG, now
+#                 #15). SLO burn-rate math (`error_rate /
+#                 sli_threshold`), severity score weighted sum,
+#                 time-since-deploy bucketing — all unwritable.
+#
+#   blocked: #10  optional types — suspect_deploy_id only on
+#                 DeployCaused hypotheses; runbook_id only if a
+#                 match was found; postmortem_draft_id only after
+#                 resolution; failed_sources empty list on full
+#                 success.
+#
+#   blocked: #11  sum types / variants — FIFTH corpus occurrence.
+#                 Hypothesis is the marquee variant case in this
+#                 domain — DeployCaused, CapacityIssue,
+#                 DependencyFailure, ConfigChange, DataIssue,
+#                 Unknown, each with its own evidence shape. Five
+#                 occurrences across five distinct domains: disputes
+#                 (#10), gate results (#12), source types (#13),
+#                 KYC document kinds (#14), incident hypotheses
+#                 (#15). At this point #11 is amongst the strongest
+#                 candidates for a Phase-1 language change.
+#
+#   blocked: #12  time / scheduling — multiple sub-shapes:
+#                 12a deadlines: "if first searcher hasn't returned
+#                     in 10s, surface what's available"
+#                 12b pause-and-resume: incidents are long-running
+#                     entities; new events re-fire the flow
+#                 12c scheduled trigger: re-investigate after N
+#                     minutes if not resolved
+#                 12e time-as-data: "deploys in last 30 min",
+#                     "incidents in last 24h"
+#
+#   blocked: #13  Other — MANDATORY SIDE EFFECTS. Second corpus
+#                 occurrence (after flow #14 KYC SAR/audit/perpetual-
+#                 monitoring). Slack channel creation, status-page
+#                 update, on-call page, IC assignment, ledger persist
+#                 — all five fire regardless of return value or
+#                 caller's interest. Two occurrences across distinct
+#                 domains: candidate for promotion if it recurs in
+#                 #18 or #19. Watch.
+#
+#   blocked: #13  Other: no string literals — searcher names,
+#                 severity codes, hypothesis kinds, runbook IDs.
+#                 Recurring.
+#
+#   blocked: #14  lazy / short-circuit evaluation — TENTH corpus
+#                 occurrence. The dedupe early-exit is the cost-
+#                 driven case (avoid 10+ parallel API calls per
+#                 alert when the alert is a known duplicate of an
+#                 active incident). Same primitive as flows #3, #6,
+#                 #7, #9, #12, #13, etc. — sustained ten-occurrence
+#                 demand across the corpus.
+#
+#   blocked: #15  list-literal construction — eighth occurrence.
+#                 searchers list, affected_services list,
+#                 failed_sources list.
+#
+#   blocked: #16  aggregation primitives — sixth occurrence.
+#                 fold over searcher results, group_by service,
+#                 max for hypothesis confidence, count for
+#                 dedupe-window matching.
+#
+#   shippable: N — the workflow that compiles below runs the full
+#                  gather + hypothesise + side-effects pipeline on
+#                  EVERY alert including duplicates of active
+#                  incidents, serialises 10+ parallel data sources
+#                  into one opaque tool, collapses the 5+ hypothesis
+#                  variants into a string-tagged record, and fires
+#                  all mandatory side effects inside the create-
+#                  artifacts tool. An on-call engineer reading this
+#                  Flow source to understand "why did the system do
+#                  X" gets no answer — the answers all live inside
+#                  the four tools.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: serial 6-step pipeline collapsing dedupe, triage,
+# parallel gather, hypothesise, runbook match, and mandatory-side-
+# effects creation into the canonical Flow body shape.
+
+type IncidentAlert       = { alert_id:        string,
+                           service_id:      string,
+                           severity_hint:   int,
+                           message:         string,
+                           fired_at:        int }
+
+type ContextBundle       = { recent_deploys:    [string],
+                           related_incidents: [string],
+                           log_signals:       [string],
+                           metric_signals:    [string],
+                           dependency_status: string,
+                           on_call:           string,
+                           partial:           bool,
+                           failed_sources:    [string] }
+
+type Hypothesis          = { kind:               string,
+                           confidence:         float,
+                           suspect_artifact:   string,
+                           cited_signals:     [string] }
+
+type RunbookSuggestion   = { runbook_id:        string,
+                           title:             string,
+                           confidence:        float,
+                           auto_executable:   bool }
+
+type IncidentDecision    = { incident_id:       string,
+                           severity:          int,
+                           hypothesis:        Hypothesis,
+                           runbook:           RunbookSuggestion,
+                           channel_url:       string,
+                           commander:         string,
+                           kind:              string,
+                           partial:           bool }
+
+tool dedupe_alert        (alert_id:   string,
+                          service_id: string,
+                          fired_at:   int)              -> bool
+  effect deterministic
+tool triage_severity     (alert: IncidentAlert)         -> int
+  effect model("triage-v1")
+tool gather_context      (service_id: string,
+                          fired_at:   int)              -> ContextBundle
+  effect deterministic
+tool hypothesise         (alert:   IncidentAlert,
+                          context: ContextBundle)       -> Hypothesis
+  effect model("hypothesise-v1")
+tool match_runbook       (hypothesis: Hypothesis)       -> RunbookSuggestion
+  effect deterministic
+tool create_incident     (alert:      IncidentAlert,
+                          severity:   int,
+                          hypothesis: Hypothesis,
+                          runbook:    RunbookSuggestion) -> IncidentDecision
+  effect mutation
+
+flow respond_to_alert(IncidentAlert) -> IncidentDecision {
+  # awkward: dedupe result discarded — should short-circuit the
+  # entire rest of the flow on a duplicate, but cannot. Every
+  # paging-storm alert runs the full pipeline. #14 lazy/short-
+  # circuit, tenth occurrence in the corpus.
+  is_duplicate = dedupe_alert(it.alert_id, it.service_id, it.fired_at)
+
+  severity = triage_severity(it)
+
+  # workaround: 10+ parallel searcher checks (deploys / history /
+  # logs / metrics / traces / slack / deps / cloud status / infra
+  # changes / on-call / SLO burn) collapse into one tool. The
+  # parallelism, per-source error tolerance, and streaming progress
+  # are invisible. Counts toward #2, #3, #4, #6, #7.
+  context = gather_context(it.service_id, it.fired_at)
+
+  # workaround: hypothesis is a sum-typed value (DeployCaused /
+  # CapacityIssue / DependencyFailure / ConfigChange / DataIssue /
+  # Unknown), each with structurally different evidence. The fat
+  # record below carries `suspect_artifact: string` and
+  # `cited_signals: [string]` as the lowest-common-denominator
+  # workaround. Per-kind follow-up actions cannot dispatch from
+  # source. Counts toward #1, #11.
+  hypothesis = hypothesise(it, context)
+
+  runbook = match_runbook(hypothesis)
+
+  # workaround: mandatory side effects (Slack channel, status page,
+  # on-call page, IC assignment, incident-ledger persist) all
+  # collapse inside create_incident. The auditor cannot tell from
+  # the source which side effects fired or when. Counts toward
+  # #13-mandatory-side-effects (second corpus occurrence).
+  decision = create_incident(it, severity, hypothesis, runbook)
+
+  decision
+}

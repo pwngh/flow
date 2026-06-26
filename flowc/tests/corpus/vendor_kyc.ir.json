@@ -1,0 +1,338 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/vendor_kyc.flow",
+  "types": [
+    {
+      "name": "KYCRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "business_id", "type": "string"},
+        {"name": "business_name", "type": "string"},
+        {"name": "business_type", "type": "string"},
+        {"name": "jurisdiction", "type": "string"},
+        {"name": "beneficial_owners", "type": "[BeneficialOwner]"},
+        {"name": "document_urls", "type": "[string]"}
+      ]
+    },
+    {
+      "name": "BeneficialOwner",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "name", "type": "string"},
+        {"name": "dob", "type": "int"},
+        {"name": "ownership_pct", "type": "float"},
+        {"name": "jurisdiction", "type": "string"},
+        {"name": "country_of_residence", "type": "string"},
+        {"name": "is_business", "type": "bool"},
+        {"name": "sub_business_id", "type": "string"}
+      ]
+    },
+    {
+      "name": "Document",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "kind", "type": "string"},
+        {"name": "extracted_text", "type": "string"},
+        {"name": "authenticity_score", "type": "float"},
+        {"name": "ocr_confidence", "type": "float"}
+      ]
+    },
+    {
+      "name": "DocVerification",
+      "kind": "record",
+      "fields": [
+        {"name": "all_verified", "type": "bool"},
+        {"name": "failures", "type": "[string]"}
+      ]
+    },
+    {
+      "name": "ScreeningResult",
+      "kind": "record",
+      "fields": [
+        {"name": "source", "type": "string"},
+        {"name": "hit", "type": "bool"},
+        {"name": "severity", "type": "float"},
+        {"name": "hits", "type": "[string]"}
+      ]
+    },
+    {
+      "name": "KYCDecision",
+      "kind": "record",
+      "fields": [
+        {"name": "outcome", "type": "string"},
+        {"name": "risk_band", "type": "string"},
+        {"name": "requires_manual_review", "type": "bool"},
+        {"name": "sar_filed", "type": "bool"},
+        {"name": "reason_codes", "type": "[string]"},
+        {"name": "next_review_at", "type": "int"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "ingest_documents",
+      "input": [
+        {"name": "urls", "type": "[string]"}
+      ],
+      "output": "[Document]",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "verify_documents",
+      "input": [
+        {"name": "docs", "type": "[Document]"}
+      ],
+      "output": "DocVerification",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_sanctions_screening",
+      "input": [
+        {"name": "business_name", "type": "string"},
+        {"name": "owners", "type": "[BeneficialOwner]"}
+      ],
+      "output": "ScreeningResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_pep_screening",
+      "input": [
+        {"name": "owners", "type": "[BeneficialOwner]"}
+      ],
+      "output": "ScreeningResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_adverse_media",
+      "input": [
+        {"name": "business_name", "type": "string"},
+        {"name": "owners", "type": "[BeneficialOwner]"}
+      ],
+      "output": "ScreeningResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_business_registry",
+      "input": [
+        {"name": "business_id", "type": "string"},
+        {"name": "jurisdiction", "type": "string"}
+      ],
+      "output": "ScreeningResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "decide_kyc",
+      "input": [
+        {"name": "req", "type": "KYCRequest"},
+        {"name": "doc_check", "type": "DocVerification"},
+        {"name": "sanctions", "type": "ScreeningResult"},
+        {"name": "pep", "type": "ScreeningResult"},
+        {"name": "adverse", "type": "ScreeningResult"},
+        {"name": "kyb", "type": "ScreeningResult"}
+      ],
+      "output": "KYCDecision",
+      "effect": {
+        "level": "model",
+        "model": "kyc-decision-v1"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "kyc",
+      "params": [
+        {"name": "it", "type": "KYCRequest", "implicit": true}
+      ],
+      "output": "KYCDecision",
+      "bindings": [
+        {
+          "name": "documents",
+          "expr": {
+            "kind": "call",
+            "tool": "ingest_documents",
+            "args": [
+              {
+                "field": "urls",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "document_urls"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "doc_check",
+          "expr": {
+            "kind": "call",
+            "tool": "verify_documents",
+            "args": [
+              {
+                "field": "docs",
+                "value": {
+                  "kind": "path",
+                  "segments": ["documents"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "sanctions",
+          "expr": {
+            "kind": "call",
+            "tool": "run_sanctions_screening",
+            "args": [
+              {
+                "field": "business_name",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "business_name"]
+                }
+              },
+              {
+                "field": "owners",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "beneficial_owners"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "pep",
+          "expr": {
+            "kind": "call",
+            "tool": "run_pep_screening",
+            "args": [
+              {
+                "field": "owners",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "beneficial_owners"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "adverse",
+          "expr": {
+            "kind": "call",
+            "tool": "run_adverse_media",
+            "args": [
+              {
+                "field": "business_name",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "business_name"]
+                }
+              },
+              {
+                "field": "owners",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "beneficial_owners"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "kyb",
+          "expr": {
+            "kind": "call",
+            "tool": "run_business_registry",
+            "args": [
+              {
+                "field": "business_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "business_id"]
+                }
+              },
+              {
+                "field": "jurisdiction",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "jurisdiction"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "decision",
+          "expr": {
+            "kind": "call",
+            "tool": "decide_kyc",
+            "args": [
+              {
+                "field": "req",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "doc_check",
+                "value": {
+                  "kind": "path",
+                  "segments": ["doc_check"]
+                }
+              },
+              {
+                "field": "sanctions",
+                "value": {
+                  "kind": "path",
+                  "segments": ["sanctions"]
+                }
+              },
+              {
+                "field": "pep",
+                "value": {
+                  "kind": "path",
+                  "segments": ["pep"]
+                }
+              },
+              {
+                "field": "adverse",
+                "value": {
+                  "kind": "path",
+                  "segments": ["adverse"]
+                }
+              },
+              {
+                "field": "kyb",
+                "value": {
+                  "kind": "path",
+                  "segments": ["kyb"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["decision"]
+      }
+    }
+  ]
+}

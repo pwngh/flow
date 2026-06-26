@@ -1,0 +1,14 @@
+type Credit = { score: int }
+type Verdict = { approved: bool, basis: Credit }
+
+tool fetch_credit(applicant_id: string) -> Credit
+  effect deterministic
+
+flow review_credit(applicant_id: string, approve: bool) -> Verdict {
+  c = fetch_credit(applicant_id)
+  Verdict { approved: approve, basis: c }
+}
+
+flow adjudicate(applicant_id: string, approve: bool) -> Verdict {
+  review_credit(applicant_id, approve)
+}

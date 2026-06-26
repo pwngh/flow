@@ -1,0 +1,5 @@
+flow classify(n: int) -> int {
+  match n {
+    other -> 0
+  }
+}

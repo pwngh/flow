@@ -1,0 +1,3 @@
+flow loop_forever(seed: int) -> int {
+  loop_forever(seed)
+}

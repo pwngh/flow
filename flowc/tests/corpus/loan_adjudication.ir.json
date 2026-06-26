@@ -1,0 +1,314 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/loan_adjudication.flow",
+  "types": [
+    {
+      "name": "LoanApplication",
+      "kind": "record",
+      "fields": [
+        {"name": "applicant_id", "type": "string"},
+        {"name": "requested_amount", "type": "int"},
+        {"name": "term_months", "type": "int"},
+        {"name": "stated_income", "type": "int"}
+      ]
+    },
+    {
+      "name": "CreditReport",
+      "kind": "record",
+      "fields": [
+        {"name": "fico", "type": "int"},
+        {"name": "dti", "type": "float"},
+        {"name": "open_accounts", "type": "int"},
+        {"name": "delinquencies", "type": "int"}
+      ]
+    },
+    {
+      "name": "IncomeData",
+      "kind": "record",
+      "fields": [
+        {"name": "verified_amount", "type": "int"},
+        {"name": "employment_status", "type": "string"},
+        {"name": "stable_months", "type": "int"}
+      ]
+    },
+    {
+      "name": "IdentityData",
+      "kind": "record",
+      "fields": [
+        {"name": "match_score", "type": "float"},
+        {"name": "fraud_flags", "type": "int"}
+      ]
+    },
+    {
+      "name": "ReviewerVerdict",
+      "kind": "record",
+      "fields": [
+        {"name": "verdict", "type": "string"},
+        {"name": "confidence", "type": "float"},
+        {"name": "reason_codes", "type": "[string]"}
+      ]
+    },
+    {
+      "name": "AdjudicationDecision",
+      "kind": "record",
+      "fields": [
+        {"name": "outcome", "type": "string"},
+        {"name": "approved_amount", "type": "int"},
+        {"name": "rate_bps", "type": "int"},
+        {"name": "adverse_reasons", "type": "[string]"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "pull_credit_report",
+      "input": [
+        {"name": "applicant_id", "type": "string"}
+      ],
+      "output": "CreditReport",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "verify_income",
+      "input": [
+        {"name": "applicant_id", "type": "string"},
+        {"name": "stated_income", "type": "int"}
+      ],
+      "output": "IncomeData",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_identity_check",
+      "input": [
+        {"name": "applicant_id", "type": "string"}
+      ],
+      "output": "IdentityData",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "review_credit",
+      "input": [
+        {"name": "app", "type": "LoanApplication"},
+        {"name": "credit", "type": "CreditReport"}
+      ],
+      "output": "ReviewerVerdict",
+      "effect": {
+        "level": "model",
+        "model": "review-credit-v1"
+      }
+    },
+    {
+      "name": "review_affordability",
+      "input": [
+        {"name": "app", "type": "LoanApplication"},
+        {"name": "income", "type": "IncomeData"}
+      ],
+      "output": "ReviewerVerdict",
+      "effect": {
+        "level": "model",
+        "model": "review-affordability-v1"
+      }
+    },
+    {
+      "name": "review_identity",
+      "input": [
+        {"name": "app", "type": "LoanApplication"},
+        {"name": "identity", "type": "IdentityData"}
+      ],
+      "output": "ReviewerVerdict",
+      "effect": {
+        "level": "model",
+        "model": "review-identity-v1"
+      }
+    },
+    {
+      "name": "judge_consensus",
+      "input": [
+        {"name": "credit", "type": "ReviewerVerdict"},
+        {"name": "income", "type": "ReviewerVerdict"},
+        {"name": "identity", "type": "ReviewerVerdict"}
+      ],
+      "output": "AdjudicationDecision",
+      "effect": {
+        "level": "model",
+        "model": "adjudicate-v1"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "adjudicate",
+      "params": [
+        {"name": "it", "type": "LoanApplication", "implicit": true}
+      ],
+      "output": "AdjudicationDecision",
+      "bindings": [
+        {
+          "name": "credit_data",
+          "expr": {
+            "kind": "call",
+            "tool": "pull_credit_report",
+            "args": [
+              {
+                "field": "applicant_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "applicant_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "income_data",
+          "expr": {
+            "kind": "call",
+            "tool": "verify_income",
+            "args": [
+              {
+                "field": "applicant_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "applicant_id"]
+                }
+              },
+              {
+                "field": "stated_income",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "stated_income"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "identity_data",
+          "expr": {
+            "kind": "call",
+            "tool": "run_identity_check",
+            "args": [
+              {
+                "field": "applicant_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "applicant_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "credit_verdict",
+          "expr": {
+            "kind": "call",
+            "tool": "review_credit",
+            "args": [
+              {
+                "field": "app",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "credit",
+                "value": {
+                  "kind": "path",
+                  "segments": ["credit_data"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "income_verdict",
+          "expr": {
+            "kind": "call",
+            "tool": "review_affordability",
+            "args": [
+              {
+                "field": "app",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "income",
+                "value": {
+                  "kind": "path",
+                  "segments": ["income_data"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "identity_verdict",
+          "expr": {
+            "kind": "call",
+            "tool": "review_identity",
+            "args": [
+              {
+                "field": "app",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "identity",
+                "value": {
+                  "kind": "path",
+                  "segments": ["identity_data"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "decision",
+          "expr": {
+            "kind": "call",
+            "tool": "judge_consensus",
+            "args": [
+              {
+                "field": "credit",
+                "value": {
+                  "kind": "path",
+                  "segments": ["credit_verdict"]
+                }
+              },
+              {
+                "field": "income",
+                "value": {
+                  "kind": "path",
+                  "segments": ["income_verdict"]
+                }
+              },
+              {
+                "field": "identity",
+                "value": {
+                  "kind": "path",
+                  "segments": ["identity_verdict"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["decision"]
+      }
+    }
+  ]
+}

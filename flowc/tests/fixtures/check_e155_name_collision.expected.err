@@ -1,0 +1,1 @@
+tests/fixtures/check_e155_name_collision.flow:11:14: error[E155]: name 'cost' collides with element field inside stage

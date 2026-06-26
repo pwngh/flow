@@ -1,0 +1,1 @@
+tests/fixtures/lex_e104_bad_escape.flow:2:21: error[E104]: invalid escape '\q' in string literal

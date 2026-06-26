@@ -1,0 +1,355 @@
+# long_running_research.flow — corpus flow #17 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# This is the FIRST OF FOUR shape stress tests (#17–#20). Domain
+# flows #1–#16 stress the language against breadth of subject matter;
+# shape tests are pointed at joints we suspect are weakest. Flow #17
+# stresses long-running, checkpointed, crash-resumable execution.
+#
+# Shape source: LangGraph's documented persistence layer (checkpoint
+# after each "super-step" — snapshot of full state — tagged with a
+# thread ID; SqliteSaver / PostgresSaver / DynamoDBSaver as
+# production backends; "workflows can automatically resume from the
+# last successful checkpoint after an exception"). Anthropic's
+# "Building effective agents" agents section (agents operate
+# "potentially for many turns" with "stopping conditions such as a
+# maximum number of iterations"; "pause for human feedback at
+# checkpoints"; bidirectional communication of intermediate
+# findings). AutoGPT's task-loop pattern.
+#
+# A long-running checkpointed research workflow has this shape:
+#
+#   session start    a research session is initiated with:
+#                      query, budget_seconds (~3600), max_subtasks,
+#                      session_id (durable identifier)
+#
+#   plan             planner emits [SubTask] for the query
+#                    sub-tasks may themselves spawn sub-sub-tasks
+#                    (agentic decomposition; LangGraph "supergraphs")
+#
+#   load checkpoint  if a checkpoint exists for this session_id:
+#                      restore the state — which sub-tasks are done,
+#                      which are in-progress, which are pending
+#                    otherwise: fresh start
+#
+#   per-sub-task loop  (over the lifetime of the session):
+#                      pick next pending or in-progress sub-task
+#                      execute (search, scrape, analyze, write)
+#                      checkpoint AFTER the sub-task — atomic write
+#                      emit progress event
+#                      if wall-clock budget exhausted:
+#                        graceful stop, return partial result
+#                      if cost budget exhausted:
+#                        graceful stop, return partial result
+#                      if iteration cap reached:
+#                        graceful stop, return partial result
+#
+#   on crash         the process dies (LLM provider outage, OOM,
+#                    redeploy, infra hiccup, node migration).
+#                    a NEW process starts up, possibly on a different
+#                    worker. it loads the checkpoint for this
+#                    session_id and resumes from the last completed
+#                    super-step.
+#                    the sub-task that was running when the process
+#                    died re-runs in full — it must be IDEMPOTENT.
+#
+#   synthesis        when all sub-tasks complete (or budget hit):
+#                      combine sub-task outputs into final report
+#                      emit a terminal completion event
+#
+#   horizontal       multiple workers share the checkpoint store
+#                    each worker can pick up an interrupted session
+#                    one session at a time per worker (no
+#                                                     concurrent claim)
+#
+# Three load-bearing facts:
+#
+#   (a) The runtime model the language has (one invocation, returns
+#       one result) is structurally incompatible with this workflow.
+#       A 1-hour research session cannot complete within a single
+#       Flow invocation because the underlying processes don't stay
+#       alive that long without restart. The language needs a
+#       runtime notion of "this flow is durable; checkpoint after
+#       each step; resume on a new worker if the current one dies."
+#       This is broader than any single rubric construct — it is a
+#       *runtime semantics* gap.
+#
+#   (b) Side effects must be IDEMPOTENT across resumption. If the
+#       process crashes after a sub-task completed and wrote its
+#       result, but before the checkpoint was committed, then on
+#       resume the sub-task re-runs and re-emits its side effect
+#       (re-queries the search API, re-writes the file, re-sends the
+#       email). Exactly-once semantics on side effects is a
+#       correctness requirement that the language has no way to
+#       express. This compounds with the MANDATORY-SIDE-EFFECTS
+#       finding from flows #14 (KYC) and #15 (incident).
+#
+#   (c) Budget exhaustion is a graceful early-termination, not a
+#       failure. The workflow must return what it has *with the
+#       indication that it stopped early*. Three budget axes:
+#       wall-clock, cost, iteration count. Each is the "deadline"
+#       sub-shape (12a) crossed with the "partial result" sub-shape
+#       (#6 streaming). The flow cannot return a sentinel "done"
+#       value; it returns a structured outcome with status +
+#       completed_count + partial_summary.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow long_research(ResearchRequest) -> ResearchOutcome
+#                                          @durable @checkpoint_per_step {
+#     # 1. load any existing checkpoint for this session:
+#     state = checkpoint_load(it.session_id)            # may be None
+#     subtasks = if state.is_none:
+#                  plan_research(it.query, it.max_subtasks)
+#                else:
+#                  state.subtasks                       # resume planning
+#
+#     # 2. budget tracking — wall-clock + cost + iterations:
+#     budget = Budget { wall_clock_deadline: now + it.budget_seconds,
+#                       cost_limit:          it.cost_limit_cents,
+#                       iter_cap:            it.max_subtasks }
+#
+#     # 3. main loop — until all sub-tasks done OR budget exhausted:
+#     loop {
+#       next = first_unfinished(subtasks)
+#       if next.is_none: break                          # all done
+#       if budget_exhausted(budget): break              # graceful stop
+#
+#       # 4. execute sub-task with IDEMPOTENT side effects:
+#       result = execute_subtask(next, it.session_id)
+#                                                       # @idempotent @retryable
+#       subtasks = subtasks with { next.id: Complete{result} }
+#
+#       # 5. checkpoint state — atomic write to durable store:
+#       checkpoint_save(it.session_id, subtasks, budget)
+#                                                       # exactly once
+#
+#       # 6. stream partial progress:
+#       emit_progress(it.session_id, subtasks)
+#     }
+#
+#     # 7. synthesise final or partial:
+#     status = if all_complete(subtasks): "complete" else: "partial"
+#     report = synthesise(it.query, subtasks)
+#     ResearchOutcome { session_id: it.session_id,
+#                       status, completed_count: count_complete(subtasks),
+#                       total_count: size(subtasks),
+#                       final_summary: report,
+#                       last_checkpoint_id: latest_checkpoint(it.session_id) }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #12  time / scheduling — PREDICTED. The biggest single
+#                 gap for this flow. Multiple sub-shapes:
+#                 12a deadlines: 1-hour wall-clock budget; cost
+#                     budget; iteration cap. Each is a graceful
+#                     early-termination signal, not a failure.
+#                 12b pause-and-resume: spans CRASHES, not just
+#                     events. This is the strongest form of 12b in
+#                     the corpus — flow #8 was minutes (preview-
+#                     confirm), flow #9 was days (onboard), flow #10
+#                     was up to 90 days (dispute outcome), flow #15
+#                     was hours (incident lifetime). Here it is
+#                     "across process death and worker migration."
+#                 12f DURABLE EXECUTION — NEW SUB-SHAPE. State must
+#                     persist not just across events but across
+#                     PROCESS DEATH, redeploys, and horizontal-scale
+#                     events. The runtime model the language assumes
+#                     ("one invocation → one return") is
+#                     structurally incompatible. LangGraph treats
+#                     this as a first-class framework feature
+#                     (checkpointers as named runtime components);
+#                     Flow today has no analogue.
+#
+#   blocked: #2   parallel fan-out + join — PREDICTED. Within a
+#                 single super-step, sub-tasks can run in parallel
+#                 (search + scrape + analyse for different sub-
+#                 queries simultaneously). Same gap as flow #4.
+#
+#   blocked: #3   in-source error handling — PREDICTED. Three
+#                 forms:
+#                 3a recovery: sub-task failure → retry with backoff
+#                 3b accumulation: collect per-sub-task failures
+#                                  into the outcome's failed_subtasks
+#                                  list
+#                 3c mandatory retry: NOT here — research can
+#                                     tolerate missing sub-tasks
+#
+#   blocked: #4   loops / fold over list — same gap as flow #4
+#                 research_multistep. Per-sub-task map, fold to
+#                 final synthesis. Second occurrence of this gap in
+#                 a research-flavoured flow.
+#
+#   blocked: #5   conditional binding — skip sub-tasks already
+#                 completed on resume; budget-check before each
+#                 sub-task; synthesise only if any sub-task
+#                 completed.
+#
+#   blocked: #6   streaming / partial results — FOURTH organic
+#                 corpus occurrence (after #9 onboarding, #15
+#                 incident, #16 product-search facets). Long-running
+#                 research is the canonical "emit progress as you
+#                 go" workflow. Partial results MATTER — at 1-hour
+#                 budgets, the consumer needs visibility into what
+#                 the system is doing. Four organic occurrences
+#                 plus the #20 stress test clears any reasonable
+#                 promotion threshold for #6.
+#
+#   blocked: #7   sub-flow composition — PREDICTED. Each sub-task is
+#                 itself a small flow (search → scrape → analyse →
+#                 write per sub-task). Production-grade research
+#                 agents (gpt-researcher, LangGraph supergraphs)
+#                 compose sub-flows; this is the explicit pattern.
+#
+#   blocked: #11  sum types / variants — SEVENTH corpus occurrence.
+#                 Sub-task status is naturally a variant:
+#                   Pending {}
+#                   InProgress {started_at, worker_id}
+#                   Complete {result, completed_at, cost_cents}
+#                   Failed {error, retries, last_attempt_at}
+#                   Skipped {reason}
+#                 Encoding as a fat record with status string +
+#                 every possible field (started_at, worker_id,
+#                 result, completed_at, cost_cents, error, retries,
+#                 last_attempt_at, reason) discards the invariant
+#                 that, e.g., `result` is meaningful only when
+#                 status == Complete. Seventh distinct domain to
+#                 demand variants.
+#
+#   blocked: #13  Other: MANDATORY SIDE EFFECTS. Third corpus
+#                 occurrence (flow #14 KYC SAR/audit, flow #15
+#                 incident channel/page, now flow #17 checkpoint
+#                 writes). The checkpoint_save call must fire after
+#                 every sub-task regardless of the flow's return.
+#                 The emit_progress call must fire after every sub-
+#                 task. Three occurrences across three distinct
+#                 domains clears the rubric's promotion threshold.
+#                 PROMOTE to slot #17 before Friday: "mandatory side
+#                 effects — operations that must execute regardless
+#                 of the flow's return value or the caller's
+#                 interest." (Slot numbering: promoted slots #14
+#                 lazy, #15 list-literal, #16 aggregation; this
+#                 becomes #17.)
+#
+#   blocked: #13  Other: SIDE-EFFECT IDEMPOTENCY / exactly-once
+#                 semantics. NEW candidate. On resume from a crash,
+#                 the sub-task that was running re-runs from scratch.
+#                 Its side effects (API calls, DB writes, emails)
+#                 will fire again unless explicitly de-duplicated.
+#                 The language has no notion of "this side-effect
+#                 tool is idempotent" or "this binding represents an
+#                 already-committed effect; do not re-fire on
+#                 resume." Distinct from mandatory side effects: the
+#                 question is not "must this fire?" but "how often
+#                 may this fire safely?" Watch for recurrence in
+#                 flow #18 iterative_refinement (per-iteration
+#                 emails) and flow #19 recursive_decomposition
+#                 (per-subtask spawn).
+#
+#   blocked: #14  lazy / short-circuit evaluation — twelfth
+#                 occurrence. Two motivations here: skip already-
+#                 completed sub-tasks on resume (cost + correctness);
+#                 skip remaining sub-tasks once budget exhausted
+#                 (correctness — must not exceed user-stated cap).
+#
+#   blocked: #15  list-literal construction — tenth occurrence.
+#                 Sub-task list constructed from planner output but
+#                 mutated across iterations; the "subtasks-with-
+#                 one-field-updated" pattern needs record-update
+#                 syntax (closely related to #15 but slightly
+#                 different).
+#
+#   blocked: #16  aggregation primitives — eighth occurrence. fold
+#                 over sub-tasks to count complete; sum cost_cents
+#                 across completed; first_unfinished(); all_complete.
+#
+#   blocked: #1   multi-branch routing — status dispatch (complete /
+#                 partial / failed / cancelled); resume-decision
+#                 dispatch (fresh / resume / restart).
+#
+#   blocked: #10  optional types — final_summary present only on
+#                 complete or partial status; last_checkpoint_id
+#                 absent on fresh start; failed_subtasks empty on
+#                 success.
+#
+#   blocked: #13  Other: no string literals — status enum, sub-task
+#                 kind enum, error categories.
+#
+#   shippable: N — what compiles below is a two-tool sketch. The
+#                  durable-execution semantics — the load-checkpoint
+#                  step, the per-step atomic write, the resume
+#                  logic, the crash-recovery, the budget tracking,
+#                  the idempotency guarantee — are ALL invisible.
+#                  An infra engineer reading this Flow source cannot
+#                  answer "what happens if the worker dies mid-
+#                  session?" The answer ("the runtime resumes from
+#                  the last checkpoint") lives outside the source.
+#                  For a flow that exists primarily to provide
+#                  crash-recovery, that is the entire point being
+#                  hidden.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: degenerate. Plan + execute. Everything load-
+# bearing about the long-running shape is inside execute_with_
+# checkpoints.
+
+type ResearchRequest = { session_id:       string,
+                       query:            string,
+                       budget_seconds:   int,
+                       cost_limit_cents: int,
+                       max_subtasks:     int }
+
+type SubTask         = { id:           string,
+                       kind:         string,
+                       description:  string,
+                       status:       string,
+                       result_text:  string,
+                       started_at:   int,
+                       completed_at: int,
+                       cost_cents:   int,
+                       error:        string,
+                       retries:      int }
+
+type ResearchOutcome = { session_id:         string,
+                       status:             string,
+                       completed_count:    int,
+                       total_count:        int,
+                       partial_summary:    string,
+                       final_summary:      string,
+                       budget_used_seconds: int,
+                       cost_used_cents:    int,
+                       last_checkpoint_id: string,
+                       failed_subtasks:    [string] }
+
+tool plan_research               (query:        string,
+                                  max_subtasks: int)            -> [SubTask]
+  effect model("plan-research-v1")
+
+tool execute_with_checkpoints    (session_id:       string,
+                                  subtasks:         [SubTask],
+                                  budget_seconds:   int,
+                                  cost_limit_cents: int)        -> ResearchOutcome
+  effect mutation
+
+flow long_research(ResearchRequest) -> ResearchOutcome {
+  # awkward: list of sub-tasks emitted but the source cannot iterate.
+  # Same gap as flow #4. Plus, on resume, the planner should not
+  # re-emit the sub-task list — the checkpointed list is the truth.
+  # Today there's no way to express "if checkpoint exists, use that;
+  # else plan fresh." Counts toward #4, #5, #12f.
+  subtasks = plan_research(it.query, it.max_subtasks)
+
+  # workaround: the entire long-running engine — load-checkpoint,
+  # per-step loop, atomic checkpoint write, budget tracking, crash
+  # recovery, resume semantics, idempotency, partial-result
+  # streaming, synthesis — collapses into one tool. The flow is a
+  # two-line sketch of an hour-long agentic process. Counts toward
+  # every blocked mark above.
+  outcome = execute_with_checkpoints(it.session_id, subtasks,
+                                     it.budget_seconds, it.cost_limit_cents)
+
+  outcome
+}

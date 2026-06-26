@@ -1,0 +1,43 @@
+{
+  "//": [
+    "Copy this file to .vscode/tasks.json at your workspace root to enable",
+    "the 'Flow: Compile current file' build task.",
+    "",
+    "Usage:",
+    "  Cmd+Shift+B  -> runs flowc against the active .flow file.",
+    "                  Errors appear in the Problems panel and as squiggles",
+    "                  in the editor, parsed by the $flowc matcher",
+    "                  contributed by the flow-syntax extension.",
+    "",
+    "Auto-run on save:",
+    "  Install the 'Trigger Task on Save' extension (Gruntfuggly.triggertaskonsave)",
+    "  and add this to .vscode/settings.json:",
+    "",
+    "    \"triggerTaskOnSave.tasks\": { \"Flow: Compile current file\": [\"**/*.flow\"] }",
+    "",
+    "Path to flowc:",
+    "  The default assumes the workspace root contains a flowc/ subdirectory",
+    "  with a built flowc binary. Edit 'command' if your flowc lives elsewhere",
+    "  (e.g. 'flowc' if it's on your PATH after make install)."
+  ],
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Flow: Compile current file",
+      "type": "shell",
+      "command": "${workspaceFolder}/flowc/flowc",
+      "args": ["--dump=checked", "${file}"],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "clear": true,
+        "showReuseMessage": false
+      },
+      "problemMatcher": "$flowc",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}

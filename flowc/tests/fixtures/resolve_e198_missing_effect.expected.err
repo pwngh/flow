@@ -1,0 +1,1 @@
+tests/fixtures/resolve_e198_missing_effect.flow:3:1: error[E198]: tool 'create_user' missing 'effect' clause

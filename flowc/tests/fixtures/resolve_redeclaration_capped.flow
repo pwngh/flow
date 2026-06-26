@@ -1,0 +1,4 @@
+type User = { id: string }
+type User = { a: int }
+type User = { b: int }
+flow f(int) -> int { it }

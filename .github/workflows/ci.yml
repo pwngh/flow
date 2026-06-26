@@ -1,0 +1,172 @@
+# Continuous integration for the Flow monorepo.
+#
+# Jobs (the gates README.md documents, plus the health processes the
+# project relies on):
+#   build       - flowc + flowd under GCC and Clang with -Werror + tests.
+#   sanitize    - flowd under AddressSanitizer + UBSan, then TSan.
+#   determinism - the byte-identity contract: same source -> same IR,
+#                 same inputs + pinned env -> same trace.
+#   docs        - mandoc lint of the man pages.
+#   fuzz        - libFuzzer smoke over the untrusted-input parsers
+#                 (flowc front-end, flowd IR loader). These found, and now
+#                 guard against, a use-after-free and an empty-input ICE.
+#
+# The C subprojects have no third-party build deps beyond flex/bison and
+# the libraries flowd links (libcurl, OpenSSL libcrypto); cJSON is
+# vendored. configure honors $CC, so the matrix selects the compiler.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APT: flex bison libcurl4-openssl-dev libssl-dev
+
+jobs:
+  build:
+    name: build+test (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT
+      - name: Build and test flowc and flowd
+        run: ./build.sh
+
+  sanitize:
+    name: sanitize (ASan/UBSan + TSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT
+      - name: Build flowc (flowd corpus tests load its IR)
+        run: cd flowc && ./configure && make
+      - name: Sanitizer matrix for flowd
+        run: cd flowd && ./configure && make sanitize
+
+  determinism:
+    name: determinism (byte-identity contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT
+      - name: Build flowc and flowd
+        run: ./build.sh --no-test
+      - name: IR + trace byte-identity
+        run: |
+          set -eu
+          for f in examples/*.flow; do
+            n=$(basename "$f" .flow)
+            SOURCE_DATE_EPOCH=0 flowc/flowc "$f" -o "/tmp/$n.a.json"
+            SOURCE_DATE_EPOCH=0 flowc/flowc "$f" -o "/tmp/$n.b.json"
+            diff "/tmp/$n.a.json" "/tmp/$n.b.json"
+            rm -rf "/tmp/$n.t1" "/tmp/$n.t2"
+            SOURCE_DATE_EPOCH=0 FLOWD_EXECUTION_ID_SUFFIX=abcdef \
+              flowd/flowd run "/tmp/$n.a.json" --trace-dir "/tmp/$n.t1"
+            SOURCE_DATE_EPOCH=0 FLOWD_EXECUTION_ID_SUFFIX=abcdef \
+              flowd/flowd run "/tmp/$n.a.json" --trace-dir "/tmp/$n.t2"
+            diff -r -x audit.log "/tmp/$n.t1" "/tmp/$n.t2"
+          done
+
+  docs:
+    name: docs (mandoc lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mandoc
+        run: sudo apt-get update && sudo apt-get install -y mandoc
+      - name: Lint man pages
+        run: |
+          out=$(mandoc -W all -T lint doc/man*/* 2>&1 | grep -v 'cannot parse date' || true)
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+
+  fuzz:
+    name: fuzz-smoke (libFuzzer + ASan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT clang
+      - name: Build (generates parser/lexer sources)
+        run: ./build.sh --no-test
+      - name: Fuzz flowc front-end (60s)
+        run: |
+          set -eu
+          cd flowc
+          clang -fsanitize=address,fuzzer -g -O1 -Isrc -D_POSIX_C_SOURCE=200809L \
+            tests/fuzz/fuzz_flowc.c $(ls src/*.c | grep -v '/main\.c$') -o /tmp/fuzz_flowc
+          mkdir -p /tmp/cf && cp ../examples/*.flow tests/fixtures/*.flow /tmp/cf/ 2>/dev/null || true
+          : > /tmp/cf/empty
+          /tmp/fuzz_flowc /tmp/cf -max_total_time=60 -timeout=10 -error_exitcode=77
+      - name: Fuzz flowd IR loader (60s)
+        run: |
+          set -eu
+          cd flowd
+          clang -fsanitize=address,fuzzer -g -O1 -Isrc -D_POSIX_C_SOURCE=200809L \
+            tests/fuzz/fuzz_flowd.c \
+            $(ls src/*.c src/adapters/*.c src/cjson/*.c | grep -v '/main\.c$') \
+            -lcrypto -lcurl -o /tmp/fuzz_flowd
+          mkdir -p /tmp/df && cp tests/corpus/*.ir.json ../examples/*.ir.json /tmp/df/ 2>/dev/null || true
+          : > /tmp/df/empty && printf '{' > /tmp/df/brace
+          ASAN_OPTIONS=detect_leaks=0 /tmp/fuzz_flowd /tmp/df -max_total_time=60 -timeout=10 -error_exitcode=77
+
+  diag-coverage:
+    name: diagnostic-code coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every emitted diagnostic code has a test
+        run: scripts/diag_coverage.sh
+
+  coverage:
+    name: coverage (gcov ratchet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y $APT
+      - name: flowc line coverage
+        run: scripts/coverage.sh flowc 78
+      - name: flowd line coverage
+        run: scripts/coverage.sh flowd 70
+
+  web:
+    name: web (wasm playground)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flex + bison
+        run: sudo apt-get update && sudo apt-get install -y flex bison
+      - uses: mymindstorm/setup-emsdk@v14
+      - name: Build the two WASM modules
+        run: web/build.sh
+      - name: Smoke-test compile + run through the modules
+        run: node web/verify.js

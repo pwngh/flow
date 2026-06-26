@@ -1,0 +1,162 @@
+# refund_decision.flow — corpus flow #2 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Stripe Refunds docs (refunds, balance, payment-method
+# status, dispute interaction). Klarna's 2024 AI-assistant rollout posts
+# (eligibility check → API action → execute, with low-confidence
+# escalation to human agents).
+#
+# A refund-request adjudication has this shape:
+#
+#   gather    lookup the original transaction
+#             get refund history on that transaction
+#             fetch customer signals (disputes, fraud score, LTV)
+#
+#   validate  requested_amount <= (original - already_refunded)
+#             transaction state OK (captured? not expired? not disputed?)
+#
+#   decide    auto-approve  if amount <= policy_threshold AND clean signals
+#             auto-deny     if amount invalid OR fraud-flagged
+#             escalate      otherwise — queue for human review
+#
+#   execute   issue refund (skip if denied/escalated)
+#             notify customer with outcome-specific message
+#
+# The three lookups are independent in production and fan out in
+# parallel. The fraud check fires only on high-value or high-risk
+# requests, not every request. The outcome dispatch is four-way:
+# denied-invalid / denied-fraud / approved / escalate; the "execute"
+# step branches on outcome.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow refund(RefundRequest) -> RefundDecision {
+#     # parallel:
+#     txn     = lookup_transaction(it.transaction_id)     # may fail (404)
+#     history = get_refund_history(it.transaction_id)
+#     signals = get_customer_signals(txn.customer_id)
+#
+#     # conditional:
+#     fraud =
+#       if it.requested_amount > 10000 or signals.fraud_score > 0.5:
+#         run_fraud_check(txn, signals)
+#       else:
+#         FraudResult { flagged: false, confidence: 1.0 }
+#
+#     # multi-branch:
+#     outcome =
+#       if it.requested_amount > txn.amount - history.total_refunded:
+#         "denied_invalid_amount"
+#       else if fraud.flagged:
+#         "denied_fraud"
+#       else if it.requested_amount <= 5000 and signals.dispute_count == 0:
+#         "approved"
+#       else:
+#         "escalate"
+#
+#     # branched execution:
+#     if outcome == "approved":
+#       issue_refund(txn, it.requested_amount)
+#     else if outcome == "escalate":
+#       queue_for_human_review(it, txn, signals, fraud)
+#     # denied: nothing to do
+#
+#     send_notification(txn.customer_id, outcome)
+#     RefundDecision { outcome, refunded_amount: it.requested_amount,
+#                      requires_review: outcome == "escalate" }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — the four-way `outcome` dispatch
+#                 and the three-way execute branch (refund / queue /
+#                 noop) have no expression in Flow today.
+#
+#   blocked: #2   parallel fan-out + join — lookup_transaction,
+#                 get_refund_history, get_customer_signals are
+#                 independent. The language serialises them.
+#
+#   blocked: #3   in-source error handling — lookup_transaction returns
+#                 "not found" for stale/typoed IDs in production; the
+#                 source has no encoding for that branch. Runtime R101
+#                 will abort the flow with no per-case recovery.
+#
+#   blocked: #5   conditional binding — `fraud` should run only on
+#                 high-value or high-risk requests, not every request.
+#                 Today it has to either always run (wasted model spend)
+#                 or always not run (false negatives on fraud).
+#
+#   blocked: #10  optional types — RefundRequest.reason is genuinely
+#                 optional in the Stripe API ("duplicate" /
+#                 "requested_by_customer" / "fraudulent" / unspecified).
+#                 RefundDecision.denial_reason is present only on deny
+#                 outcomes. Today these have to be always-present.
+#
+#   blocked: #13  Other: no string literals — `outcome == "approved"`
+#                 is unwritable; the outcome dispatch can't even be
+#                 stated. Outcomes have to come from tool returns as
+#                 opaque strings the source cannot inspect.
+#
+#   shippable: N — the workflow shape is rule-driven branching with a
+#                  model at the boundary, plus a parallel gather. What
+#                  compiles below collapses the entire decision into a
+#                  single decide_refund tool. That's the workaround
+#                  that hides the real shape — the flow now reads as
+#                  "look up three things, ask a black box, send an
+#                  email," which is exactly what a refund flow is not.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: serial lookups, single decide tool, opaque notify.
+
+type RefundRequest   = { transaction_id: string,
+                       requested_amount: int,
+                       reason: string }
+
+type Transaction     = { id: string, customer_id: string,
+                       amount: int, captured: bool }
+
+type RefundHistory   = { total_refunded: int, n: int }
+
+type CustomerSignals = { dispute_count: int,
+                       fraud_score: float,
+                       lifetime_value: int }
+
+type RefundDecision  = { outcome: string,
+                       refunded_amount: int,
+                       requires_review: bool }
+
+tool lookup_transaction    (id:      string)             -> Transaction
+  effect deterministic
+tool get_refund_history    (txn_id:  string)             -> RefundHistory
+  effect deterministic
+tool get_customer_signals  (cust_id: string)             -> CustomerSignals
+  effect deterministic
+tool decide_refund         (req:     RefundRequest,
+                            txn:     Transaction,
+                            history: RefundHistory,
+                            signals: CustomerSignals)    -> RefundDecision
+  effect model("refund-decide-v1")
+tool send_notification     (cust_id: string,
+                            outcome: string)             -> bool
+  effect mutation
+
+flow refund(RefundRequest) -> RefundDecision {
+  # awkward: these three lookups are independent in production but the
+  # language has no fan-out form; counts toward #2.
+  txn      = lookup_transaction(it.transaction_id)
+  history  = get_refund_history(it.transaction_id)
+  signals  = get_customer_signals(txn.customer_id)
+
+  # workaround: the decision logic (validate → fraud-check → 4-way
+  # outcome) is hidden inside a single tool. The source no longer
+  # describes the decision; it describes "ask the oracle."
+  decision = decide_refund(it, txn, history, signals)
+
+  # awkward: bool return discarded; should fire only on terminal
+  # outcomes (approve/deny), not on escalation. #1 blocks that.
+  notified = send_notification(txn.customer_id, decision.outcome)
+
+  decision
+}

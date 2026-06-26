@@ -1,0 +1,12 @@
+type RiskReport = { score: int, flagged: bool }
+
+tool risk_check(amount: int) -> RiskReport
+  effect model("risk-v1")
+
+flow triage(int) -> int {
+  report = risk_check(it)
+  tier   = if it > 1000 then 3
+           else if it > 100 then 2
+           else 1
+  tier
+}

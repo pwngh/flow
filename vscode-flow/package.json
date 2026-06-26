@@ -1,0 +1,43 @@
+{
+  "name": "flow-syntax",
+  "displayName": "Flow Language",
+  "description": "Syntax highlighting for the Flow agent DSL (.flow files).",
+  "version": "0.0.1",
+  "publisher": "flow",
+  "engines": { "vscode": "^1.60.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "flow",
+        "aliases": ["Flow", "flow"],
+        "extensions": [".flow"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "flow",
+        "scopeName": "source.flow",
+        "path": "./syntaxes/flow.tmLanguage.json"
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "flowc",
+        "owner": "flow",
+        "source": "flowc",
+        "fileLocation": "absolute",
+        "pattern": {
+          "regexp": "^(.+?):(\\d+):(\\d+):\\s+(error|warning|note)\\[(E\\d+)\\]:\\s+(.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        }
+      }
+    ]
+  }
+}

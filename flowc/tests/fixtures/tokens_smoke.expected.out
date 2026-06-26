@@ -1,0 +1,27 @@
+tests/fixtures/tokens_smoke.flow:1:1: KW_TYPE
+tests/fixtures/tokens_smoke.flow:1:6: IDENT 'User'
+tests/fixtures/tokens_smoke.flow:1:11: '='
+tests/fixtures/tokens_smoke.flow:1:13: '{'
+tests/fixtures/tokens_smoke.flow:1:15: IDENT 'id'
+tests/fixtures/tokens_smoke.flow:1:17: ':'
+tests/fixtures/tokens_smoke.flow:1:19: KW_STRING
+tests/fixtures/tokens_smoke.flow:1:25: ','
+tests/fixtures/tokens_smoke.flow:1:27: IDENT 'age'
+tests/fixtures/tokens_smoke.flow:1:30: ':'
+tests/fixtures/tokens_smoke.flow:1:32: KW_INT
+tests/fixtures/tokens_smoke.flow:1:35: ','
+tests/fixtures/tokens_smoke.flow:1:37: IDENT 'balance'
+tests/fixtures/tokens_smoke.flow:1:44: ':'
+tests/fixtures/tokens_smoke.flow:1:46: KW_FLOAT
+tests/fixtures/tokens_smoke.flow:1:52: '}'
+tests/fixtures/tokens_smoke.flow:2:1: KW_TOOL
+tests/fixtures/tokens_smoke.flow:2:6: IDENT 'create_user'
+tests/fixtures/tokens_smoke.flow:2:17: '('
+tests/fixtures/tokens_smoke.flow:2:18: IDENT 'email'
+tests/fixtures/tokens_smoke.flow:2:23: ':'
+tests/fixtures/tokens_smoke.flow:2:25: KW_STRING
+tests/fixtures/tokens_smoke.flow:2:31: ')'
+tests/fixtures/tokens_smoke.flow:2:33: ARROW
+tests/fixtures/tokens_smoke.flow:2:36: IDENT 'User'
+tests/fixtures/tokens_smoke.flow:3:3: KW_EFFECT
+tests/fixtures/tokens_smoke.flow:3:10: KW_DETERMINISTIC

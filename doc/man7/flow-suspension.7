@@ -1,0 +1,118 @@
+.TH FLOW-SUSPENSION 7 "May 2026" "" "Flow Manual"
+.SH NAME
+flow-suspension \- suspension and resumption semantics
+.SH DESCRIPTION
+A node in a Flow execution can return one of three results: a
+value (the normal case), an error (which propagates per
+effect-level rules), or a suspension token.  Suspended nodes can
+be resumed when their wait condition is satisfied.  The trace
+records the suspension token, the wait condition, the eventual
+resumption, and the resumed-from state; replay handles suspension
+as first-class state, and the forthcoming trace UI is being
+designed around it.
+.PP
+The v1 runtime ships the
+.I infrastructure
+for suspension but only one built-in suspending tool.  Additional
+suspending tools are easy to add later because they slot into the
+existing machinery.
+.SH WAIT CONDITIONS
+A suspension token carries a wait condition.  The v1 runtime
+recognizes only
+.BR human_approval .
+The other two categories below are not built into the runtime; a
+host can implement them against the suspension infrastructure (see
+.B WHAT V1 DOES NOT INCLUDE
+).
+.TP
+.B human_approval
+A human reviewer must approve, reject, or override the decision.
+The built-in
+.B await_human_approval
+tool returns this category.  This is the only category the v1
+runtime recognizes.
+.TP
+.B scheduled_time
+The flow resumes at a wall-clock time
+.IR T .
+The host is responsible for scheduling the wake-up; the runtime
+accepts a "resume at T" trigger but does not itself schedule one.
+Use cron, systemd timers, or a job scheduler.
+.TP
+.B external_event
+The flow resumes when an external event fires.  The host receives
+webhooks (or other event sources) and calls the runtime's resume
+API; flowd does not own the HTTP surface.
+.SH BUILT-IN AWAIT_HUMAN_APPROVAL
+The only suspending tool the v1 runtime ships built-in.  The
+audit story for regulated industries depends on human-approval
+payloads being legible without per-deployment schema invention.
+The built-in standardizes the payload shape:
+.PP
+.RS
+.nf
+{
+  "approver":           "compliance@example.com",
+  "decision":           "approve",
+  "rationale":          "Risk score within policy bounds.",
+  "decision_timestamp": "2026-05-26T14:22:08.531Z",
+  "policy_ref":         "policy-2026-04-15"
+}
+.fi
+.RE
+.PP
+.B decision
+is one of
+.BR approve ,
+.BR reject ,
+or
+.BR override .
+The standardized shape lets downstream justification tools consume
+it without per-host adaptation, and gives the forthcoming trace UI
+a payload it can render natively.
+.SH RESUMPTION PROTOCOL
+The runtime's resume API,
+.BR flowd_resume (3),
+takes the suspension token from a prior run and a decision payload
+(the value being injected at the suspension point).  Resumption is
+a separate execution: the runtime writes a new trace directory
+linked to the original by the
+.B resumed_from
+manifest field and by per-node
+.B replay_of
+cross-references on every node of the resumed run.
+.PP
+The original suspended trace is unchanged.  Its manifest stays
+.BR "\(dqstatus\(dq: \(dqsuspended\(dq"
+forever \(em because that is what it was.  The trace store is
+append-only; history is not edited, it is extended.  A flow that
+suspended and was later resumed produced two distinct executions:
+the original, whose outcome is
+.BR suspended ,
+and the resumed run, whose outcome is whatever it eventually
+reached.  Both directories persist; the relationship between them
+is recoverable from the cross-references.
+.PP
+A flow that suspends and resumes multiple times produces a chain
+of trace directories, each
+.B resumed_from
+the previous.  Walking the chain backward reconstructs the
+complete event history.  Walking it forward from any point yields
+the latest known state.
+.SH WHAT V1 DOES NOT INCLUDE
+.TP
+.B Other built-in suspending tools.
+Hosts may implement
+.B await_scheduled_time
+and
+.B await_external_event
+against the suspension infrastructure in v1; built-in versions
+ship in v1.1.
+.TP
+.B Wall-clock scheduling.
+The runtime accepts "resume at T" triggers but does not itself
+schedule them.
+.TP
+.B Webhook receivers.
+The host receives webhooks and calls the runtime's resume API.
+flowd does not own the HTTP surface.

@@ -1,0 +1,1 @@
+tests/fixtures/check_e150_non_list.flow:7:7: error[E150]: pipeline applied to non-list value (source type User)

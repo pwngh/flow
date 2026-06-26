@@ -1,0 +1,90 @@
+{
+  "flows": [
+    {
+      "name": "tier_one",
+      "output": "[int]",
+      "params": [
+        {
+          "implicit": false,
+          "name": "extra",
+          "type": "[Plan]"
+        },
+        {
+          "implicit": false,
+          "name": "uid",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "ir_version": "1.0",
+  "tools": [
+    {
+      "effect": {
+        "level": "deterministic"
+      },
+      "input": [
+        {
+          "name": "uid",
+          "type": "string"
+        }
+      ],
+      "name": "fetch_plans",
+      "output": "[Plan]"
+    }
+  ],
+  "types": [
+    {
+      "id": 1,
+      "kind": "primitive",
+      "name": "string"
+    },
+    {
+      "id": 2,
+      "kind": "primitive",
+      "name": "int"
+    },
+    {
+      "id": 3,
+      "kind": "primitive",
+      "name": "float"
+    },
+    {
+      "id": 4,
+      "kind": "primitive",
+      "name": "bool"
+    },
+    {
+      "fields": [
+        {
+          "name": "cost",
+          "type": "int"
+        },
+        {
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "name": "score",
+          "type": "int"
+        }
+      ],
+      "id": 100,
+      "kind": "record",
+      "name": "Plan"
+    },
+    {
+      "elem": "Plan",
+      "id": 1000,
+      "kind": "list",
+      "name": "[Plan]"
+    },
+    {
+      "elem": "int",
+      "id": 1001,
+      "kind": "list",
+      "name": "[int]"
+    }
+  ],
+  "variant_index": []
+}

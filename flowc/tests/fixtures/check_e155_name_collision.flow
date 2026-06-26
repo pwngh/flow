@@ -1,0 +1,13 @@
+type Plan = { id: string, cost: int }
+
+tool best_plans() -> [Plan]
+  effect deterministic
+tool get_cost() -> int
+  effect deterministic
+
+flow demo(Plan) -> [Plan] {
+  cost = get_cost()
+  ps = best_plans()
+     | where cost <= 100
+  ps
+}

@@ -1,0 +1,213 @@
+# support_escalation.flow — corpus flow #7 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Intercom Fin AI documentation (confidence-threshold
+# handoff, five named escalation triggers, full-context transfer to
+# human agent). Anthropic's "Building effective agents" routing
+# pattern (classify → dispatch to specialised followup task).
+#
+# A two-model support-escalation flow has this shape:
+#
+#   stage 1 — classify (model call #1)
+#     classifier produces { category, confidence, sentiment,
+#                           urgency, out_of_scope, asks_for_human }
+#
+#   routing decision (any single trigger sends to human queue):
+#     confidence < threshold      → escalate
+#     sentiment ≤ angry           → escalate
+#     out_of_scope == true        → escalate
+#     asks_for_human == true      → escalate  (Intercom: immediate)
+#     is_vip and urgency >= high  → escalate
+#     otherwise                   → continue to stage 2
+#
+#   stage 2 — respond (model call #2, AUTO-RESPOND PATH ONLY)
+#     retrieve KB articles for category
+#     generate reply with citations
+#     post-check: reply.confidence > threshold? else escalate-after-reply
+#
+#   side effects:
+#     auto-respond  → send reply, mark conversation resolved
+#     escalate      → open ticket, attach
+#                       { transcript, classification, attempted_reply?,
+#                         summary, recommended_next_steps }
+#                     The handoff payload is the "sixth sense" — humans
+#                     pick up with full context, not a cold transcript.
+#
+# Two load-bearing facts:
+#
+#   (a) Stage 2 must NOT run on the escalation path. The reply model
+#       is the expensive part — ~10× the cost of the classifier. If
+#       both run on every request, the unit economics that make
+#       AI-first support viable disappear. Same economic argument as
+#       flow #3 moderation and flow #6 fraud_fanout; this is the
+#       canonical case of cost-driven short-circuit.
+#
+#   (b) The escalation handoff is itself a small flow: assemble
+#       transcript + classifier output + (optionally) drafted reply +
+#       recommended next steps + sentiment. In production this is
+#       typically a separate flow that calls a summarization model.
+#       Sub-flow composition surfaces naturally.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow handle_support(SupportRequest) -> SupportResponse {
+#     c = classify_intent(it.message, it.conversation_id)
+#
+#     escalate_reason =
+#       if c.confidence < 0.8:           "low_confidence"
+#       else if c.sentiment <= -0.5:     "negative_sentiment"
+#       else if c.out_of_scope:          "out_of_scope"
+#       else if c.asks_for_human:        "explicit_request"
+#       else if it.is_vip and c.urgency >= 3:
+#                                        "vip_complex"
+#       else:                             ""  # empty = auto-respond
+#
+#     if escalate_reason != "":
+#       handoff = build_handoff_payload(it, c, None)    # sub-flow
+#       ticket  = open_escalation_ticket(handoff, escalate_reason)
+#       return SupportResponse {
+#         outcome: "escalated",
+#         escalation_ticket_id: ticket.id,
+#         requires_human: true,
+#       }
+#
+#     # auto-respond path:
+#     kb     = retrieve_kb_articles(c.category, it.message)
+#     reply  = generate_reply(it, c, kb)                # model call #2
+#
+#     if reply.confidence < 0.7:
+#       handoff = build_handoff_payload(it, c, reply)   # post-attempt
+#       ticket  = open_escalation_ticket(handoff, "low_reply_confidence")
+#       return SupportResponse {
+#         outcome: "escalated_after_reply",
+#         reply_text: "",
+#         escalation_ticket_id: ticket.id,
+#         requires_human: true,
+#       }
+#
+#     send_reply(it.conversation_id, reply.text)
+#     SupportResponse {
+#       outcome: "auto_responded",
+#       reply_text: reply.text,
+#       requires_human: false,
+#     }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — five escalation triggers, all
+#                 sending to "escalate" but each with its own reason
+#                 code that the handoff needs. Plus the auto-respond
+#                 vs escalated-after-reply split. Plus the pre-reply
+#                 vs post-reply escalation paths. The whole routing
+#                 step IS branching.
+#
+#   blocked: #3   in-source error handling — classifier failure on
+#                 garbled input, KB-retrieve timeout, reply-model
+#                 timeout. Production behaviour: degrade gracefully,
+#                 typically by escalating. R101 aborts.
+#
+#   blocked: #5   conditional binding — generate_reply runs ONLY on
+#                 the auto-respond path; build_handoff_payload runs
+#                 ONLY on escalate paths; send_reply runs only on
+#                 successful auto-respond. All three are conditionals
+#                 the language does not have.
+#
+#   blocked: #7   sub-flow composition — Anthropic's routing pattern
+#                 explicitly names "directs it to a specialised
+#                 followup task." Production-grade support routes
+#                 refund / billing / technical to category-specific
+#                 reply flows, each with its own retrieval, prompt,
+#                 and post-checks. Today they must inline into one
+#                 generate_reply tool that fans out internally.
+#
+#   blocked: #10  optional types — attempted_reply is present only on
+#                 post-reply escalations; escalation_ticket_id only on
+#                 escalate outcomes; reply_text only on auto-respond.
+#                 Today every field is always-present; the consumer
+#                 must read outcome to know which fields to ignore.
+#
+#   blocked: #13  Other (CONFIRMED for promotion to slot #14): lazy /
+#                 short-circuit evaluation. Third appearance — flow #3
+#                 moderation cascade, flow #6 fraud allowlist, now
+#                 flow #7 support escalation. In each case the gap is
+#                 the same: a cheap signal should be able to skip an
+#                 expensive downstream call. The economic argument is
+#                 identical across all three; the construct missing
+#                 is identical. Promote before Friday. Add slot #14
+#                 to the rubric's pre-named list: "lazy / on-demand
+#                 / short-circuit evaluation — a binding may not be
+#                 evaluated at all, gated by a predicate or by
+#                 termination of an earlier branch."
+#
+#   blocked: #13  Other: no string literals — category enum, sentiment
+#                 enum, escalate_reason enum, outcome enum. Recurring;
+#                 already in the well-known pile.
+#
+#   shippable: N — the workflow that compiles below runs the expensive
+#                  reply-generation model on every request, including
+#                  ones that should immediately escalate. At the cost
+#                  ratio Intercom and similar systems operate under
+#                  (auto-respond ~$0.02, full reply with RAG ~$0.20),
+#                  this flow is 10× more expensive than the design
+#                  warrants. It is also incorrect on the post-reply
+#                  escalation path: there is no way to NOT send a
+#                  low-confidence reply that the language could have
+#                  flagged for human review instead.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: classify → reply (always) → dispatch decides what
+# to do with the reply. Reply waste is observable on the source.
+
+type SupportRequest   = { conversation_id: string,
+                        customer_id:     string,
+                        message:         string,
+                        is_vip:          bool }
+
+type Classification   = { category:        string,
+                        confidence:      float,
+                        sentiment:       float,
+                        urgency:         int,
+                        out_of_scope:    bool,
+                        asks_for_human:  bool }
+
+type ReplyDraft       = { text:       string,
+                        sources:    [string],
+                        confidence: float }
+
+type SupportResponse  = { outcome:               string,
+                        reply_text:            string,
+                        escalation_ticket_id:  string,
+                        requires_human:        bool }
+
+tool classify_intent      (message:    string,
+                           customer_id: string)             -> Classification
+  effect model("classify-intent-v1")
+tool generate_reply       (req:        SupportRequest,
+                           c:          Classification)      -> ReplyDraft
+  effect model("generate-reply-v1")
+tool dispatch_response    (req:        SupportRequest,
+                           c:          Classification,
+                           draft:      ReplyDraft)          -> SupportResponse
+  effect mutation
+
+flow handle_support(SupportRequest) -> SupportResponse {
+  c = classify_intent(it.message, it.customer_id)
+
+  # awkward: reply generation runs on EVERY request, including ones
+  # that should escalate immediately on the classification signal.
+  # Roughly 10x cost-bloat at production scale; counts toward #5
+  # conditional binding AND #13 lazy / short-circuit eval (the latter
+  # promoted to slot #14 — third occurrence in the corpus).
+  draft = generate_reply(it, c)
+
+  # workaround: the entire 5-trigger routing decision plus the post-
+  # reply low-confidence escalation plus the side effects (send_reply
+  # vs open_escalation_ticket vs build_handoff_payload) collapse into
+  # one tool. The source no longer shows the routing policy.
+  response = dispatch_response(it, c, draft)
+
+  response
+}

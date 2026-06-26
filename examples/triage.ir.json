@@ -1,0 +1,112 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "2026-06-15T21:59:36Z",
+  "source_file": "./examples/triage.flow",
+  "types": [
+    {
+      "name": "RiskReport",
+      "kind": "record",
+      "fields": [
+        {"name": "score", "type": "int"},
+        {"name": "flagged", "type": "bool"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "risk_check",
+      "input": [
+        {"name": "amount", "type": "int"}
+      ],
+      "output": "RiskReport",
+      "effect": {
+        "level": "model",
+        "model": "risk-v1"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "triage",
+      "params": [
+        {"name": "it", "type": "int", "implicit": true}
+      ],
+      "output": "int",
+      "bindings": [
+        {
+          "name": "report",
+          "expr": {
+            "kind": "call",
+            "tool": "risk_check",
+            "args": [
+              {
+                "field": "amount",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "tier",
+          "expr": {
+            "kind": "conditional",
+            "branches": [
+              {
+                "cond": {
+                  "kind": "binop",
+                  "op": ">",
+                  "left": {
+                    "kind": "path",
+                    "segments": ["it"]
+                  },
+                  "right": {
+                    "kind": "literal",
+                    "value": 1000,
+                    "type": "int"
+                  }
+                },
+                "consequent": {
+                  "kind": "literal",
+                  "value": 3,
+                  "type": "int"
+                }
+              },
+              {
+                "cond": {
+                  "kind": "binop",
+                  "op": ">",
+                  "left": {
+                    "kind": "path",
+                    "segments": ["it"]
+                  },
+                  "right": {
+                    "kind": "literal",
+                    "value": 100,
+                    "type": "int"
+                  }
+                },
+                "consequent": {
+                  "kind": "literal",
+                  "value": 2,
+                  "type": "int"
+                }
+              }
+            ],
+            "else": {
+              "kind": "literal",
+              "value": 1,
+              "type": "int"
+            }
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["tier"]
+      }
+    }
+  ]
+}

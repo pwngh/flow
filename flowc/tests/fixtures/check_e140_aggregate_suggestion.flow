@@ -1,0 +1,8 @@
+type Item = { id: string, cost: int, flagged: bool }
+
+tool fetch_items(uid: string) -> [Item]
+  effect deterministic
+
+flow total_cost(uid: string) -> int {
+  fetch_items(uid) | sum cst
+}

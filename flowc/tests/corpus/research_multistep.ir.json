@@ -1,0 +1,119 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/research_multistep.flow",
+  "types": [
+    {
+      "name": "ResearchRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "query", "type": "string"}
+      ]
+    },
+    {
+      "name": "Question",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "text", "type": "string"}
+      ]
+    },
+    {
+      "name": "Citation",
+      "kind": "record",
+      "fields": [
+        {"name": "url", "type": "string"},
+        {"name": "title", "type": "string"},
+        {"name": "excerpt", "type": "string"}
+      ]
+    },
+    {
+      "name": "ResearchReport",
+      "kind": "record",
+      "fields": [
+        {"name": "summary", "type": "string"},
+        {"name": "citations", "type": "[Citation]"},
+        {"name": "confidence", "type": "float"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "plan_questions",
+      "input": [
+        {"name": "query", "type": "string"}
+      ],
+      "output": "[Question]",
+      "effect": {
+        "level": "model",
+        "model": "planner-v1"
+      }
+    },
+    {
+      "name": "execute_research_plan",
+      "input": [
+        {"name": "query", "type": "string"},
+        {"name": "questions", "type": "[Question]"}
+      ],
+      "output": "ResearchReport",
+      "effect": {
+        "level": "model",
+        "model": "researcher-v1"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "research",
+      "params": [
+        {"name": "it", "type": "ResearchRequest", "implicit": true}
+      ],
+      "output": "ResearchReport",
+      "bindings": [
+        {
+          "name": "questions",
+          "expr": {
+            "kind": "call",
+            "tool": "plan_questions",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "report",
+          "expr": {
+            "kind": "call",
+            "tool": "execute_research_plan",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              },
+              {
+                "field": "questions",
+                "value": {
+                  "kind": "path",
+                  "segments": ["questions"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["report"]
+      }
+    }
+  ]
+}

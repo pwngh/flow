@@ -1,0 +1,4 @@
+flow f(int) -> int {
+  total = it + 1
+  totl
+}

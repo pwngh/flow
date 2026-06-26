@@ -1,0 +1,4 @@
+flow geometric(a: int, b: int, c: int) -> bool {
+  x = (a + b) * 2
+  x == c
+}

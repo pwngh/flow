@@ -1,0 +1,1489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flow playground</title>
+<style>
+  :root { --bg:#fbfbf9; --fg:#1a1a18; --mut:#6b6b66; --line:#e3e3dd;
+          --panel:#fff; --accent:#185fa5; --ok:#0f6e56; --err:#a32d2d;
+          --warn:#854f0b; --note:#185fa5; --chip:#f1efe8; --typ:#6b4fb0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#191917; --fg:#e9e9e4; --mut:#9b9b95; --line:#34342f;
+            --panel:#201f1d; --accent:#85b7eb; --ok:#5dcaa5; --err:#f09595;
+            --warn:#efaf57; --note:#85b7eb; --chip:#2a2a27; --typ:#bca8f0; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+           padding:12px 16px; border-bottom:1px solid var(--line); }
+  header b { font-weight:600; }
+  header .sub { color:var(--mut); font-size:13px; }
+  header .sp { margin-left:auto; }
+  code, pre, textarea, input, .mono { font-family:ui-monospace, Menlo, monospace; }
+  input, button, select { font-size:13px; padding:6px 10px; border:1px solid var(--line);
+                  border-radius:6px; background:var(--panel); color:inherit; }
+  select { padding:6px 6px; cursor:pointer; }
+  #apikey { width:190px; }
+  button { cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .live-lbl { display:inline-flex; align-items:center; gap:5px; cursor:pointer; user-select:none; }
+  .live-lbl input { margin:0; cursor:pointer; }
+  #input.invalid { border-color:var(--err); }
+  #intype b { color:var(--accent); font-weight:400; }
+  main { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:12px 16px; }
+  @media (max-width:760px) { main { grid-template-columns:1fr; } }
+  /* Syntax-highlighting editor: a colored <pre> (#hl) sits exactly under a
+   * transparent-text <textarea> (#src). The textarea stays the real input —
+   * caret, selection, undo all native — and the two layers MUST share an
+   * identical box model (font, padding, line-height, white-space, tab-size,
+   * border) or the caret drifts from the glyphs. The container owns the border
+   * + resize; #src scrolls and #hl is scrolled to match. */
+  .editor { position:relative; height:340px; resize:vertical; overflow:hidden;
+            border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+  #hl, #src { position:absolute; inset:0; margin:0; padding:11px; border:0;
+              font:15px/1.55 ui-monospace, Menlo, monospace; white-space:pre;
+              overflow:auto; tab-size:4; box-sizing:border-box; }
+  #hl  { z-index:0; pointer-events:none; color:var(--fg); overflow:hidden; }
+  #src { z-index:1; background:transparent; color:transparent;
+         caret-color:var(--fg); resize:none; scrollbar-width:none; }
+  /* Hide #src's scrollbar so it reserves no gutter — otherwise a space-
+   * reserving scrollbar (Linux/Windows) would shift #src's text by the bar
+   * width while #hl (no scrollbar) stays put, drifting the caret. Both layers
+   * are now gutterless and aligned on every platform; scrolling still works
+   * via wheel, keyboard, and drag-select. */
+  #src::-webkit-scrollbar { display:none; }
+  #src::selection { background:rgba(128,140,170,.35); }
+  .t-kw  { color:var(--accent); } .t-typ { color:var(--typ); }
+  .t-str { color:var(--ok); }     .t-num { color:var(--warn); }
+  .t-com { color:var(--mut); font-style:italic; }
+  .col { display:flex; flex-direction:column; gap:12px; }
+  .ed-h { display:flex; align-items:center; gap:8px; font:12px/1 ui-monospace, monospace; color:var(--mut); padding:0 2px 1px; }
+  .ed-tools { margin-left:auto; display:flex; gap:6px; align-items:center; }
+  .ed-tools select, .tb { font:11px/1 ui-monospace, monospace; padding:4px 7px; border:1px solid var(--line);
+                          border-radius:6px; background:var(--panel); color:var(--mut); cursor:pointer; }
+  .tb:hover, .ed-tools select:hover { color:var(--fg); }
+  .tb.done { color:var(--ok); }
+  .card { border:1px solid var(--line); border-radius:8px; background:var(--panel);
+          overflow:hidden; }
+  .card h2 { margin:0; font:12px/1 ui-monospace, monospace; color:var(--mut);
+             padding:9px 11px; border-bottom:1px solid var(--line); font-weight:400; }
+  .card pre { margin:0; padding:11px; font-size:12.5px; line-height:1.55;
+              white-space:pre-wrap; word-break:break-word; max-height:240px;
+              overflow:auto; }
+  #out { font-size:26px; padding:14px; overflow-wrap:anywhere; max-height:280px; overflow:auto; }
+  .trace-row { display:flex; gap:10px; font:12px/1 ui-monospace, monospace;
+               padding:8px 11px; border-top:1px solid var(--line); }
+  .trace-row:first-child { border-top:none; }
+  .trace-row .k { color:var(--mut); }
+  .trace-row .v { margin-left:auto; }
+  .hint { color:var(--mut); font-size:12px; padding:0 16px 16px; }
+  .diag { margin-bottom:14px; }
+  .diag:last-child { margin-bottom:0; }
+  .diag-head { font-size:13px; margin-bottom:3px; }
+  .diag-sev { color:var(--err); font-weight:500; }
+  .diag-code, .caret { color:var(--err); }
+  /* notes and warnings are continuations/softer than errors — tint them so a
+   * "first declared here" note reads as related context, not a second error. */
+  .diag.note .diag-sev, .diag.note .caret { color:var(--note); }
+  .diag.warning .diag-sev, .diag.warning .diag-code, .diag.warning .caret { color:var(--warn); }
+  .diag-frame { margin:0; font-family:ui-monospace, Menlo, monospace;
+                font-size:12.5px; line-height:1.6; color:var(--mut);
+                white-space:pre; overflow-x:auto; }
+  .diag-frame .src  { color:var(--fg); }
+  .diag-frame .help { color:var(--ok); }
+  .diag-msg { font-size:13px; color:var(--err); white-space:pre-wrap; }
+  /* a clickable "did you mean" — applying the fix rewrites the program */
+  .qf { font:inherit; color:var(--ok); background:none; border:none; padding:0;
+        cursor:pointer; border-bottom:1px dashed var(--ok); }
+  .qf:hover { opacity:.7; }
+  .count { float:right; font:11px/1 ui-monospace, monospace; color:var(--mut);
+           font-weight:400; letter-spacing:.02em; }
+  .copy { float:right; font:11px/1 ui-monospace, monospace; color:var(--mut);
+          background:none; border:none; padding:0; cursor:pointer; }
+  .copy:hover { color:var(--fg); }
+  .copy.done { color:var(--ok); }
+  .count .e { color:var(--err); } .count .w { color:var(--warn); }
+  .ok-state { color:var(--ok); font-size:13px; display:flex; align-items:center; gap:7px; }
+  .ok-state b { font-weight:500; }
+  /* trace pipeline: one chip per executed node, sized/colored by what it did */
+  .pipe { display:flex; flex-wrap:wrap; gap:6px; padding:11px; }
+  .pnode { border:1px solid var(--line); border-radius:6px; padding:6px 9px;
+           background:var(--chip); cursor:pointer; font:11.5px/1.3 ui-monospace, monospace;
+           min-width:62px; text-align:left; color:inherit; }
+  .pnode:hover { border-color:var(--accent); }
+  .pnode.sel { border-color:var(--accent); box-shadow:inset 2px 0 0 var(--accent); }
+  .pnode .nk { color:var(--fg); }
+  .pnode.model .nk { color:var(--accent); }
+  .pnode .nm { color:var(--mut); display:block; margin-top:2px; }
+  .pdetail { border-top:1px solid var(--line); padding:10px 11px;
+             font:11.5px/1.5 ui-monospace, monospace; }
+  .pdetail .row { display:flex; gap:8px; }
+  .pdetail .k { color:var(--mut); } .pdetail .v { color:var(--fg); margin-left:auto;
+             white-space:pre-wrap; text-align:right; overflow-wrap:anywhere;
+             max-height:140px; overflow:auto; }
+  .prov { padding:8px 11px; border-top:1px solid var(--line); display:flex;
+          flex-wrap:wrap; gap:4px 14px; font:11px/1.4 ui-monospace, monospace;
+          color:var(--mut); }
+  .prov .h { color:var(--fg); }
+  /* lightweight JSON syntax highlight for the IR panel */
+  .j-key { color:var(--accent); } .j-str { color:var(--ok); }
+  .j-num { color:var(--warn); } .j-kw  { color:var(--err); }
+  /* the editable host: one card per tool, generated from the IR */
+  .th-note { font-weight:400; color:var(--mut); font-size:11px; }
+  .tools { padding:9px 11px; display:flex; flex-direction:column; gap:9px;
+           max-height:300px; overflow:auto; }
+  .tool-empty { color:var(--mut); font:12px/1.4 ui-monospace, monospace; }
+  .tool-card { border:1px solid var(--line); border-radius:6px; padding:8px; }
+  .tool-card.unused { opacity:.5; }
+  .tool-note { color:var(--mut); font:11px/1.4 ui-monospace, monospace; margin-bottom:6px; }
+  .tool-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+               font:12px/1.3 ui-monospace, monospace; margin-bottom:6px; }
+  .tool-name { color:var(--accent); }
+  .tool-sig  { color:var(--mut); }
+  .eff { font-size:10px; padding:1px 7px; border-radius:9px; margin-left:auto;
+         background:var(--chip); color:var(--mut); letter-spacing:.02em; }
+  .eff-model    { color:var(--accent); }
+  .eff-mutation { color:var(--err); }
+  .tool-impl { width:100%; min-height:46px; resize:vertical; box-sizing:border-box;
+               font:12px/1.5 ui-monospace, monospace; padding:6px 8px;
+               border:1px solid var(--line); border-radius:5px;
+               background:var(--bg); color:var(--fg); }
+  .tool-impl.invalid { border-color:var(--err); }
+  .tool-err { display:none; color:var(--err); font:11px/1.4 ui-monospace, monospace; margin-top:4px; }
+  .tool-impl.invalid + .tool-err { display:block; }
+  /* replay-vs-default diff */
+  .diff-head { padding:9px 11px 3px; font:11px/1.3 ui-monospace, monospace; color:var(--mut); }
+  .diff-back { float:right; background:none; border:0; padding:0; cursor:pointer;
+               font:11px/1 ui-monospace, monospace; color:var(--mut); }
+  .diff-back:hover { color:var(--fg); }
+  .diff-row { display:flex; gap:10px; padding:6px 11px; border-top:1px solid var(--line);
+              font:12px/1.45 ui-monospace, monospace; }
+  .diff-row .dr-k { color:var(--mut); white-space:nowrap; }
+  .diff-row .dr-v { margin-left:auto; display:flex; flex-direction:column; align-items:flex-end;
+                    gap:2px; overflow-wrap:anywhere; max-height:140px; overflow:auto; }
+  .diff-row .dr-tag { color:var(--mut); font-size:10px; margin-right:6px; }
+  .diff-row.changed { background:var(--chip); }
+  .diff-row .old { color:var(--err); } .diff-row .new { color:var(--ok); }
+  .diff-row .dim { color:var(--mut); }
+  /* run history + drift */
+  .runs { padding:9px 11px; display:flex; flex-direction:column; gap:6px; max-height:240px; overflow:auto; }
+  .run-row { display:flex; align-items:center; gap:9px; padding:5px 8px; border:1px solid var(--line);
+             border-radius:6px; font:12px/1.3 ui-monospace, monospace; }
+  .run-row.base { border-color:var(--accent); }
+  .run-out { color:var(--fg); font-weight:600; min-width:20px; }
+  .run-in { color:var(--mut); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .run-model { color:var(--mut); font-size:10px; }
+  .run-acts { display:flex; gap:5px; margin-left:auto; }
+  /* export-as-runnable modal */
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex;
+           align-items:center; justify-content:center; z-index:50; }
+  .modal[hidden] { display:none; }
+  .modal-box { width:min(840px,92vw); max-height:86vh; display:flex; flex-direction:column;
+               background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .modal-head { display:flex; align-items:center; gap:8px; padding:9px 12px;
+                border-bottom:1px solid var(--line); font:12px/1 ui-monospace, monospace; color:var(--mut); }
+  .code-body { margin:0; padding:14px; overflow:auto; font-size:12.5px; line-height:1.5; white-space:pre; }
+  /* suspension / inline approval */
+  .susp { display:flex; flex-direction:column; gap:9px; }
+  .susp-h { font:13px/1.3 ui-monospace, monospace; color:var(--fg); }
+  .susp-sub { font:12px/1.4 ui-monospace, monospace; color:var(--mut); }
+  .susp-sub b { color:var(--fg); font-weight:600; }
+  .susp-err:empty { display:none; }
+  .susp .tool-impl { min-height:64px; }
+  .susp-btns { display:flex; gap:8px; }
+  .susp-btns button { font:12px/1 ui-monospace, monospace; padding:7px 13px; border-radius:7px;
+                      border:1px solid var(--line); background:var(--chip); color:var(--fg); cursor:pointer; }
+  .susp-btns .susp-ok:hover { border-color:var(--ok); color:var(--ok); }
+  .susp-btns .susp-no:hover { border-color:var(--err); color:var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <b>flow playground</b>
+  <span class="sp"></span>
+  <label class="sub mono" id="intype" for="input">--input <b>int</b></label>
+  <input id="input" value="750" size="12" class="mono" spellcheck="false"
+         placeholder="JSON, e.g. 750" title="the flow input, parsed as JSON"
+         aria-label="flow input as JSON">
+  <input id="apikey" type="password" autocomplete="off" spellcheck="false"
+         placeholder="sk-ant-… · real model (optional)"
+         title="Your Anthropic key. Used only in this browser to call api.anthropic.com directly for model() tools; never stored or sent anywhere else. Leave blank to run offline with stub tools.">
+  <select id="model" title="model for real model() calls (your key, your cost)">
+    <option value="claude-haiku-4-5">haiku 4.5</option>
+    <option value="claude-sonnet-4-6">sonnet 4.6</option>
+    <option value="claude-opus-4-8">opus 4.8</option>
+  </select>
+  <label class="sub live-lbl" title="recompile and run as you type (off while a key is set — model calls run only on Run)">
+    <input type="checkbox" id="live" checked> live</label>
+  <button id="replay" disabled
+          title="re-run against the recorded trace, re-invoking the model with your edited tool cards">replay</button>
+  <button id="run" disabled>loading&hellip;</button>
+</header>
+
+<main>
+  <div class="col">
+    <div class="ed-h">
+      <span>flow source<span class="th-note"> &middot; edit and it recompiles live</span></span>
+      <span class="ed-tools">
+        <select id="template" title="load a starter flow"></select>
+        <button id="dlflow" class="tb" type="button" title="download the .flow source">&darr; flow</button>
+        <button id="dlcode" class="tb" type="button" title="export as a runnable Python/TS harness">&darr; code</button>
+        <button id="sharelink" class="tb" type="button" title="copy a shareable link (the flow is encoded in the URL)">link</button>
+        <button id="reset" class="tb" type="button" title="discard saved work and reload the sample">reset</button>
+      </span>
+    </div>
+    <div class="editor">
+      <pre id="hl" aria-hidden="true"></pre>
+      <textarea id="src" spellcheck="false" wrap="off"
+                autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
+    </div>
+    <div class="card"><h2>tools<span class="th-note"> &middot; the host you supply &mdash; edit to drive the flow</span></h2>
+      <div id="tools" class="tools"><div class="tool-empty">compile to populate</div></div></div>
+  </div>
+  <div class="col">
+    <div class="card"><h2>output<span id="ocount" class="count"></span></h2><div id="out" class="mono" aria-live="polite">&mdash;</div></div>
+    <div class="card"><h2>trace<button id="dltrace" class="copy" type="button" title="download this run as JSON — source, input, output, and the full provenance trace">&darr; json</button></h2><div id="trace"><div class="trace-row"><span class="k">run a flow to record a trace</span></div></div></div>
+    <div class="card"><h2>IR &middot; flowc<span class="th-note"> &middot; compiled representation</span><button id="ircopy" class="copy" type="button">copy</button></h2><pre id="ir">&mdash;</pre></div>
+    <div class="card"><h2>runs<span class="th-note"> &middot; history &amp; drift</span></h2>
+      <div id="runs" class="runs"><div class="tool-empty">run a flow to start a history</div></div></div>
+  </div>
+</main>
+
+<div id="codeModal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <span>export &middot; runnable harness</span>
+      <select id="codeShape" title="serving shape">
+        <option value="reqres">request / response</option>
+        <option value="webhook">webhook</option>
+        <option value="worker">job worker</option>
+      </select>
+      <span class="sp"></span>
+      <button id="codeCopy" class="tb" type="button">copy</button>
+      <button id="codeDl" class="tb" type="button">&darr; .py</button>
+      <button id="codeClose" class="tb" type="button">close</button>
+    </div>
+    <pre id="codeBody" class="code-body"></pre>
+  </div>
+</div>
+
+<script src="flowc.js"></script>
+<script src="flowd.js"></script>
+<script>
+const SAMPLE =
+`type RiskReport = { score: int, flagged: bool }
+
+tool risk_check(amount: int) -> RiskReport
+  effect model("risk-v1")
+
+flow triage(int) -> int {
+  report = risk_check(it)
+  tier   = if report.flagged then 3
+           else if report.score > 700 then 2
+           else 1
+  tier
+}
+`;
+const $ = id => document.getElementById(id);
+
+/* Starter flows for the examples menu — each a complete, compiling story across
+ * the effect levels. */
+const CLASSIFY =
+`type Triage = { category: string, urgency: int, needs_human: bool }
+
+tool classify(text: string) -> Triage
+  effect model("triage-v1")
+
+flow ticket(string) -> Triage {
+  classify(it)
+}
+`;
+const REVIEW =
+`type Draft = { text: string, risk: int }
+type Approval = { approver: string, ok: bool }
+
+tool draft_reply(question: string) -> Draft
+  effect model("support-v1")
+tool await_human_approval(prompt: string) -> Approval
+  effect mutation
+
+flow review(string) -> Approval {
+  draft = draft_reply(it)
+  await_human_approval(draft.text)
+}
+`;
+const ONBOARD =
+`type Application = { id: string, amount: int }
+type Credit = { score: int, band: string }
+type Decision = { approve: bool, rationale: string }
+
+tool fetch_credit(id: string) -> Credit
+  effect deterministic
+tool assess(score: int, amount: int) -> Decision
+  effect model("underwriter-v1")
+tool notify(id: string, approved: bool) -> bool
+  effect mutation
+
+flow onboard(Application) -> Decision {
+  credit = fetch_credit(it.id)
+  decision = assess(credit.score, it.amount)
+  ok = notify(it.id, decision.approve)
+  decision
+}
+`;
+const TEMPLATES = {
+  'triage':                   { src: SAMPLE,   input: '750' },
+  'request → response':       { src: CLASSIFY, input: '"login keeps failing, please refund"' },
+  'human approval gate':      { src: REVIEW,   input: '"how do I export my data?"' },
+  'onboarding · all effects': { src: ONBOARD,  input: '{ "id": "cust_42", "amount": 15000 }' },
+};
+const WS_KEY = 'flow.playground.v1';
+
+/* A workspace shared via the URL (#w=<base64 json>). */
+function wsFromHash() {
+  try {
+    const m = (location.hash || '').match(/(?:^#|&)w=([^&]+)/);
+    if (!m) return null;
+    /* The fragment is base64 of the workspace JSON's UTF-8 bytes; undo that in
+     * three steps — base64 → raw bytes → decode as UTF-8 with TextDecoder (not the
+     * deprecated unescape(), so accented text in a flow survives a share link). */
+    const bytes = Uint8Array.from(atob(m[1]), c => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch (_) { return null; }
+}
+
+/* Restore before the first run: a shared link wins, else the last autosaved
+ * session, else the sample. The API key is intentionally never persisted. */
+var bootWS = (function () {
+  let ws = wsFromHash();
+  if (ws && location.hash) history.replaceState(null, '', location.pathname + location.search);
+  if (!ws) { try { ws = JSON.parse(localStorage.getItem(WS_KEY) || 'null'); } catch (_) {} }
+  $('src').value = (ws && ws.src) || SAMPLE;
+  if (ws && ws.input != null) $('input').value = ws.input;
+  if (ws && ws.model) $('model').value = ws.model;
+  $('template').innerHTML = '<option value="" disabled selected>examples…</option>' +
+    Object.keys(TEMPLATES).map(k => `<option value="${k}">${k}</option>`).join('');
+  return ws;
+})();
+
+let flowc, flowd;
+
+/* A WASM call that returns a malloc'd char* hands ownership to us: read the
+ * bytes out, then free the pointer. A NULL return means failure, with the
+ * detail in the module's static error slot (returned as a borrowed string). */
+function callOwned(mod, fn, args) {
+  const ptr = mod.ccall(fn, 'number', args.map(() => 'string'), args);
+  if (!ptr) return null;
+  const s = mod.UTF8ToString(ptr);
+  mod._free(ptr);
+  return s;
+}
+function rmrf(FS, path) {
+  let st; try { st = FS.stat(path); } catch (e) { return; }
+  if (FS.isDir(st.mode)) {
+    for (const n of FS.readdir(path))
+      if (n !== '.' && n !== '..') rmrf(FS, path + '/' + n);
+    FS.rmdir(path);
+  } else FS.unlink(path);
+}
+
+/* HTML-escape every value before it reaches innerHTML. Trace fields and
+ * diagnostic text are influenced by the user's program (a model id, an
+ * identifier), so nothing interpolated below is trusted. */
+const esc = s => String(s).replace(/[&<>]/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[m]));
+/* esc plus the double-quote, for values placed inside a "..."-quoted attribute.
+ * Flow identifiers can't contain a quote today, but the renderer shouldn't bank
+ * on that — a stray quote would otherwise truncate the attribute. */
+const escAttr = s => esc(s).replace(/"/g, '&quot;');
+
+let traceNodes = [];                               /* last run's per-node records */
+const isModelNode = n => n.effect_level === 'model' || n.node_kind === 'model_call';
+const fmtMs = ms => ms == null ? '—' : (ms < 1 ? '<1ms' : ms + 'ms');
+/* A trace value is {inline: <json>} when small, or {ref: "sha256:…"} when the
+ * bytes are too big to inline and live in the content-addressed store instead.
+ * valFmt is for the EYE only: it shows the JSON, or — for a by-reference value —
+ * a short hash as a stand-in label. Never feed valFmt's output back anywhere that
+ * needs the real value: that 12-character hash is neither JSON nor unique. Cards
+ * fill only from inline values (see fillModelCards); diffs compare via cmpVal. */
+const valFmt = v => {
+  if (v == null) return '—';
+  if (v.inline !== undefined) return JSON.stringify(v.inline);
+  if (v.ref !== undefined) return String(v.ref).replace(/^sha256:/, '').slice(0, 12) + '…';
+  return JSON.stringify(v);
+};
+/* Same idea as valFmt, but for COMPARING two runs (drift, replay). A diff must
+ * never mistake two different large outputs for one another, so a by-reference
+ * value compares by its FULL content hash — not the shortened-for-the-eye prefix
+ * valFmt shows, where two distinct values could share the first 12 hex digits. */
+const cmpVal = v => v == null ? '—'
+  : v.inline !== undefined ? JSON.stringify(v.inline)
+  : v.ref !== undefined ? String(v.ref)
+  : JSON.stringify(v);
+const shortHash = h => h ? String(h).replace(/^sha256:/, '').slice(0, 10) : '—';
+
+/* Minimal JSON syntax highlight for the IR panel: tag strings (key vs value),
+ * keywords, and numbers. Runs on the HTML-escaped text so it can't inject. */
+function highlightJSON(s) {
+  return esc(s).replace(
+    /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+    (m, str, colon, kw, num) =>
+      str !== undefined ? `<span class="${colon ? 'j-key' : 'j-str'}">${str}</span>${colon || ''}`
+      : kw !== undefined ? `<span class="j-kw">${kw}</span>`
+      : `<span class="j-num">${num}</span>`);
+}
+
+/* Flow source highlighting for the editor overlay. The keyword set is the
+ * lexer's (lex.l) minus the four primitive types (int/float/bool/string), which
+ * FLOW_TYP colors separately — so the tokenizer never colors a word the compiler
+ * doesn't treat as one. This is highlighting, not parsing, so it stays lenient. */
+const FLOW_KW = new Set(('all and any asc backoff by concat count dedupe desc ' +
+  'deterministic effect else factor false flow forever if initial it match max ' +
+  'min model mutation not or pick pure rank retry row select sum take then tool ' +
+  'top true try type using where').split(' '));
+const FLOW_TYP = new Set(['int', 'float', 'bool', 'string']);
+/* One alternation, scanned left to right: a comment or string wins first (so a
+ * '#' or keyword inside them stays inert), then numbers, identifiers, and any
+ * single leftover char. Every byte is consumed, so esc-ing each piece is safe. */
+const FLOW_TOK =
+  /(#[^\n]*)|("(?:\\.|[^"\\\n])*")|(\b\d[0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9_]+)?)|([A-Za-z_][A-Za-z0-9_]*)|([\s\S])/g;
+function highlightFlow(src) {
+  return src.replace(FLOW_TOK, (m, com, str, num, id) =>
+    com !== undefined ? `<span class="t-com">${esc(com)}</span>`
+    : str !== undefined ? `<span class="t-str">${esc(str)}</span>`
+    : num !== undefined ? `<span class="t-num">${esc(num)}</span>`
+    : id  !== undefined
+        ? (FLOW_KW.has(id) ? `<span class="t-kw">${esc(id)}</span>`
+           : (FLOW_TYP.has(id) || /^[A-Z]/.test(id)) ? `<span class="t-typ">${esc(id)}</span>`
+           : esc(id))
+    : esc(m));
+}
+/* Repaint the highlight layer from the textarea and keep the two scrolled
+ * together — called on every keystroke and on programmatic edits (quick-fix,
+ * the initial sample). Scroll-only sync (no re-tokenize) is a cheaper path. */
+function paintEditor() {
+  $('hl').innerHTML = highlightFlow($('src').value);
+  syncScroll();
+}
+function syncScroll() {
+  $('hl').scrollTop = $('src').scrollTop;
+  $('hl').scrollLeft = $('src').scrollLeft;
+}
+/* Highlighting is independent of the WASM modules — wire it now so the sample
+ * is colored on load and typing tracks immediately, even before flowc/flowd
+ * finish loading. (The debounced compile is wired separately, once they do.) */
+$('src').addEventListener('input', paintEditor);
+$('src').addEventListener('scroll', syncScroll);
+paintEditor();
+
+/* Render the run as a clickable pipeline of node chips plus a provenance line,
+ * reading the manifest AND the per-node records flowd wrote into the in-browser
+ * FS. The manifest alone (status/elapsed/budget/hashes) and each nodes/nN.json
+ * (node_kind, effect_level, elapsed_ms, the invocations that flowed,
+ * model/provider/tokens/cost for model_call nodes, plus retry_attempts and
+ * errors when present) are already on disk. */
+function renderTrace(flowName, execName) {
+  const FS = flowd.FS, base = '/trace/' + flowName;
+  let exec, manifest;
+  try {
+    exec = execName || FS.readdir(base).find(n => n !== '.' && n !== '..');
+    manifest = JSON.parse(FS.readFile(base + '/' + exec + '/manifest.json',
+                                      { encoding: 'utf8' }));
+  } catch (e) { $('trace').innerHTML =
+    '<div class="trace-row"><span class="k">no trace</span></div>'; return; }
+
+  const ndir = base + '/' + exec + '/nodes';
+  traceNodes = [];
+  try {
+    FS.readdir(ndir).filter(n => n.endsWith('.json'))
+      .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)))
+      .forEach(f => { try {
+        traceNodes.push(JSON.parse(FS.readFile(ndir + '/' + f, { encoding: 'utf8' })));
+      } catch (e) {} });
+  } catch (e) {}
+
+  let pipe = '<div class="pipe">';
+  traceNodes.forEach((n, i) => {
+    const kind = n.node_kind || n.node_id;
+    pipe += `<button type="button" class="pnode${isModelNode(n) ? ' model' : ''}" ` +
+      `data-i="${i}" aria-label="${escAttr(kind + ' node ' + n.node_id)}">` +
+      `<span class="nk">${esc(kind)}</span>` +
+      `<span class="nm">${esc(n.node_id)} · ${esc(fmtMs(n.elapsed_ms))}</span></button>`;
+  });
+  pipe += '</div>';
+
+  const b = manifest.budget_summary || {};
+  const prov = '<div class="prov">' +
+    `<span>status <span class="h">${esc(manifest.status)}</span></span>` +
+    `<span>${traceNodes.length} nodes · ${esc(fmtMs(manifest.elapsed_ms))}</span>` +
+    (b.cost_cents != null ? `<span>cost <span class="h">${esc(b.cost_cents)}¢</span></span>` : '') +
+    ((b.tokens_in || b.tokens_out) ? `<span>tokens <span class="h">${esc(b.tokens_in)}/${esc(b.tokens_out)}</span></span>` : '') +
+    `<span>ir <span class="h">${esc(shortHash(manifest.ir_hash))}</span></span>` +
+    `<span>in→out <span class="h">${esc(shortHash(manifest.input_hash))}→${esc(shortHash(manifest.output_hash))}</span></span>` +
+    '</div>';
+
+  const focused = document.activeElement;          /* keep the keyboard's place across live re-runs */
+  const keepI = focused && focused.classList && focused.classList.contains('pnode')
+    ? focused.dataset.i : null;
+  $('trace').innerHTML = pipe + '<div class="pdetail" id="pdetail"></div>' + prov;
+  const keep = keepI != null && $('trace').querySelector('.pnode[data-i="' + keepI + '"]');
+  if (keep) { showNodeDetail(+keepI); keep.focus(); }
+  else showNodeDetail(traceNodes.length - 1);       /* default: land on the output node */
+}
+
+/* Fill the detail panel for node i: the values that flowed through it (inputs
+ * and output), plus model metrics when it is a model_call. */
+function showNodeDetail(i) {
+  const n = traceNodes[i];
+  if (!n) return;
+  document.querySelectorAll('.pnode').forEach((el, j) => {
+    el.classList.toggle('sel', j === i);
+    if (j === i) el.setAttribute('aria-current', 'true'); else el.removeAttribute('aria-current');
+  });
+  const inv = (n.invocations || [])[0] || {};
+  const rows = [];
+  if (inv.inputs !== undefined) rows.push(['input', JSON.stringify(inv.inputs)]);
+  if (inv.output !== undefined) rows.push(['output', valFmt(inv.output)]);
+  rows.push(['kind', n.node_kind + (n.effect_level ? ' · ' + n.effect_level : '')]);
+  if (n.model)              rows.push(['model', n.model + (n.provider ? ' · ' + n.provider : '')]);
+  if (n.tokens_in != null && isModelNode(n)) rows.push(['tokens', n.tokens_in + ' in / ' + n.tokens_out + ' out']);
+  if (n.cost_cents != null && isModelNode(n)) rows.push(['cost', n.cost_cents + '¢']);
+  if (n.retry_attempts)     rows.push(['retries', String(n.retry_attempts)]);
+  if ((n.errors || []).length) rows.push(['errors', JSON.stringify(n.errors)]);
+  $('pdetail').innerHTML = rows.map(([k, v]) =>
+    `<div class="row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
+}
+
+/* Render flowc's "line:col: error CODE: message" diagnostics as a source frame
+ * with a caret under the offending token — the look Rust and Elm popularized.
+ * `src` is the program the locations refer to. A flowd runtime error arrives
+ * instead as a JSON blob {severity,id,message,file} (the file key is ignored)
+ * with no source span, so it renders as a headline only. Some runtime errors
+ * are plain strings; those and anything else fall back to plain text. */
+function renderDiagnostics(raw, src) {
+  const rows = src.split('\n');
+  const counts = { error: 0, warning: 0, note: 0 };
+  const head = (sev, code, msg) => {
+    if (counts[sev] !== undefined) counts[sev]++;
+    return `<div class="diag ${esc(sev)}"><div class="diag-head">` +
+      `<span class="diag-sev">${esc(sev)}</span>` +
+      (code ? `<span class="diag-code">[${esc(code)}]</span>` : '') +
+      `: ${esc(msg)}</div>`;
+  };
+  let html = '';
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    if (line[0] === '{') {                 /* a flowd runtime error is a JSON blob */
+      try {
+        const j = JSON.parse(line);
+        if (j && j.message) { html += head(j.severity || 'error', j.id, j.message) + '</div>'; continue; }
+      } catch (e) { /* not JSON after all — fall through to the text paths */ }
+    }
+    const m = line.match(/^(\d+):(\d+): (error|warning|note)(?:\s+(\w+))?: (.*)$/);
+    if (!m) { html += `<div class="diag-msg">${esc(line)}</div>`; continue; }
+    let [, ln, col, sev, code, msg] = m;
+    /* Peel a "; did you mean 'X'?" suffix off the message. The span + the
+     * replacement X ride on the button's data-* so one click rewrites the
+     * offending token in the editor and recompiles (see applyQuickFix). */
+    let help = '', fix = '';
+    const dm = msg.match(/^(.*); did you mean '([^']*)'\?$/);
+    if (dm) { msg = dm[1]; fix = dm[2]; help = `did you mean '${fix}'?`; }
+    /* Show tabs as one space: the compiler counts a tab as a single column
+     * (lex.l track), so 1 char == 1 column keeps the caret aligned. */
+    const row  = (rows[+ln - 1] || '').replace(/\t/g, ' ');
+    const tok  = (row.slice(+col - 1).match(/^\w+/) || [''])[0];
+    const span = tok.length || 1;
+    const bar  = ' │ ';
+    /* data-token is the word the diagnostic pointed at; applyQuickFix only
+     * rewrites if that word is still there, so an edit between render and
+     * click can't make the fix clobber an unrelated token. */
+    const helpHtml = help
+      ? ` <button class="qf" data-line="${escAttr(ln)}" data-col="${escAttr(col)}" ` +
+        `data-token="${escAttr(tok)}" data-fix="${escAttr(fix)}">${esc(help)}</button>`
+      : '';
+    const caretLine =
+      esc(' '.repeat(ln.length) + bar) + ' '.repeat(Math.max(0, +col - 1)) +
+      `<span class="caret">${'^'.repeat(span)}</span>` + helpHtml;
+    /* Color the framed line with the same tokenizer as the editor. The spans
+     * carry no width, so the caret line below (built from col and the token
+     * length) still lines up exactly. */
+    html += head(sev, code, msg) +
+      `<pre class="diag-frame">${esc(ln + bar)}<span class="src">${highlightFlow(row)}</span>` +
+      `\n${caretLine}</pre></div>`;
+  }
+  return { html, counts };
+}
+
+/* Replace the \w+ token at (line,col) with `fix` and recompile — the action
+ * behind a "did you mean" quick-fix button. Locations are 1-based, matching
+ * the compiler. A no-op if the location does not land on a word (defensive:
+ * the source may have changed between render and click). */
+function applyQuickFix(line, col, token, fix) {
+  const value = $('src').value;
+  const lines = value.split('\n');
+  const li = +line - 1, c = +col - 1;
+  if (li < 0 || li >= lines.length) return;
+  const s = lines[li];
+  const m = s.slice(c).match(/^\w+/);
+  if (!m || m[0] !== token) return;                /* source moved on; do nothing */
+  lines[li] = s.slice(0, c) + fix + s.slice(c + m[0].length);
+  $('src').value = lines.join('\n');
+  paintEditor();
+  runAll();
+}
+
+/* "3 errors · 1 note" for the output card header — only the nonzero kinds. */
+function diagCount(counts) {
+  const part = (n, w, cls) => n ? `<span class="${cls}">${n} ${w}${n>1?'s':''}</span>` : '';
+  return [part(counts.error,'error','e'), part(counts.warning,'warning','w'),
+          part(counts.note,'note','n')].filter(Boolean).join(' · ');
+}
+
+/* The editable host. Each tool in the IR gets a card whose textarea holds the
+ * JSON it returns; flow_run_hosted asks flowdServeTool (below) for that value.
+ * `toolImpls` survives recompiles so edits persist; `renderedSig` skips a
+ * rebuild when the tool set is unchanged, so editing a card never yanks focus
+ * out from under you. Unedited cards hold the exact stub default (from
+ * flow_tool_defaults), so a fresh compile runs identically to before. */
+let toolImpls = {}, toolValid = {}, toolDirty = {}, renderedSig = '';
+let lastIR = null, lastFlow = null;                /* last successful compile, for replay */
+let replayMode = false;                            /* trace panel is showing a replay diff, not a run */
+/* Real-model mode: with a key, model() tools call Claude instead of stubbing.
+ * irTools/irTypes describe the current IR; modelCache memoizes answers by
+ * (model, tool, args); realPending collects this pass's uncached model calls
+ * (see the resolve-then-rerun loop in run()). */
+let apiKey = '', curModel = 'claude-haiku-4-5';
+let irTools = {}, irTypes = [], modelCache = {}, realPending = [];
+/* Run history + drift: each clean run is snapshotted (input, output, per-node
+ * outputs); pin one as the baseline to diff later runs against it. */
+let runs = [], baselineRun = -1;
+
+/* Export-as-runnable: turn the current flow into a Python serving harness using
+ * the `flowd` binding — the playground→prod bridge. Tool methods are stubbed with
+ * effect-level guidance; the serving shape (request/response, webhook, worker)
+ * wraps Runtime.run the way flowd.serve intends. */
+function pyTools(ir) {
+  return (ir.tools || []).map(t => {
+    const params = ['self'].concat((t.input || []).map(p => p.name)).join(', ');
+    const lvl = (t.effect || {}).level;
+    const note = lvl === 'model'         ? 'effect model("' + ((t.effect || {}).model || '') + '") — call your LLM; return a ' + t.output
+               : lvl === 'mutation'      ? 'effect mutation — the real side effect; wrap with flowd.serve.idempotent so a retry can\'t double-fire'
+               : lvl === 'deterministic' ? 'effect deterministic — a pure lookup/compute (cached + replayable)'
+               :                           'effect pure';
+    return '    def ' + t.name + '(' + params + '):\n' +
+           '        # ' + note + '\n' +
+           '        raise NotImplementedError(' + JSON.stringify('implement ' + t.name) + ')';
+  }).join('\n\n');
+}
+function genPython(ir, shape) {
+  const fname = ((ir.flows || [])[0] || {}).name || 'flow';
+  const head =
+'"""' + fname + ' — generated from a Flow playground sketch.  pip install flowd"""\n' +
+'import json, pathlib\n' +
+'from flowd import load_ir, Runtime\n\n' +
+'IR = r"""\n' + JSON.stringify(ir, null, 2) + '\n"""\n\n' +
+'# load_ir() takes a path — the IR is a file on disk, the seam between flowc and\n' +
+'# flowd. Materialize the embedded document, then load it.\n' +
+'_IR_PATH = ' + JSON.stringify(fname + '.ir.json') + '\n' +
+'pathlib.Path(_IR_PATH).write_text(IR)\n' +
+'Flow = load_ir(_IR_PATH)\n\n\n' +
+'class Host(Flow):\n' +
+'    """One method per tool — the flow calls these with the IR field names as\n' +
+'    kwargs; each returns a value of the tool\'s declared output type."""\n\n' +
+pyTools(ir) + '\n\n\n';
+  if (shape === 'webhook') return head +
+'# webhook: park a suspended run, resume on the callback (flowd.serve.Pending)\n' +
+'from flowd import Suspension\n' +
+'from flowd.serve import FileStore, Pending\n' +
+'pending = Pending(FileStore("pending"))\n\n' +
+'def on_request(payload):\n' +
+'    with Runtime(Host(), trace_dir="traces") as rt:\n' +
+'        out = rt.run(payload)\n' +
+'    if isinstance(out, Suspension):           # paused for a human\n' +
+'        pending.park(out.token, context={})\n' +
+'        return {"status": "pending", "token": out.token}\n' +
+'    return out\n\n' +
+'def on_callback(token, decision):             # e.g. the approval webhook\n' +
+'    with Runtime(Host(), trace_dir="traces") as rt:\n' +
+'        return pending.resume(rt, token, decision)\n';
+  if (shape === 'worker') return head +
+'# job worker: at-least-once delivery; a redelivered job replays its trace, and\n' +
+'# idempotent mutations make the re-run safe (no double-charge / double-send).\n' +
+'def process(job):\n' +
+'    with Runtime(Host(), trace_dir="traces") as rt:\n' +
+'        return rt.run(job)\n\n' +
+'if __name__ == "__main__":\n' +
+'    for job in queue:                          # your queue: SQS, Redis, Kafka, …\n' +
+'        process(job)\n';
+  return head +
+'# request / response: one Runtime per call; the sealed trace is the audit record\n' +
+'def handle(payload):\n' +
+'    with Runtime(Host(), trace_dir="traces") as rt:\n' +
+'        return rt.run(payload)\n\n' +
+'if __name__ == "__main__":\n' +
+'    print(handle(json.loads(' + JSON.stringify($('input').value || 'null') + ')))\n';
+}
+function renderCode() {
+  const irStr = callOwned(flowc, 'flow_compile', [$('src').value]);   /* compile the live source, not the last run */
+  if (!irStr) { $('codeBody').textContent = '# the flow does not compile — fix the errors in the editor, then export.'; return; }
+  $('codeBody').textContent = genPython(JSON.parse(irStr), $('codeShape').value);
+}
+function exportCode() { renderCode(); $('codeModal').hidden = false; }   /* always opens, even mid-suspension */
+
+const shortModel = m => (String(m).match(/haiku|sonnet|opus|fable/) || ['model'])[0];
+
+/* Snapshot the just-finished clean run (input, output, per-node outputs) for the
+ * history list — so you can pin one as a baseline and diff later runs against it. */
+function snapshotCurrent() {
+  const nodes = {};
+  let irHash = '';
+  try {
+    const FS = flowd.FS, base = '/trace/' + lastFlow;
+    const exec = execByStatus(lastFlow, 'complete') || FS.readdir(base).find(n => n.startsWith('exec_'));
+    const dir = base + '/' + exec + '/nodes';
+    try { irHash = JSON.parse(FS.readFile(base + '/' + exec + '/manifest.json', { encoding: 'utf8' })).ir_hash || ''; } catch (_) {}
+    for (const f of FS.readdir(dir).filter(n => n.endsWith('.json'))) {
+      const j = JSON.parse(FS.readFile(dir + '/' + f, { encoding: 'utf8' }));
+      nodes[j.node_id] = { kind: j.node_kind, out: (cmpVal(((j.invocations || [])[0] || {}).output) || '').slice(0, 2000) };
+    }
+  } catch (_) {}
+  /* tag the snapshot with the flow's name + IR hash so drift can tell when two
+   * runs aren't the same program (positional node alignment would be misleading). */
+  runs.unshift({ flow: lastFlow, ir: irHash, input: $('input').value, model: curModel,
+                 output: ($('out').textContent || '').slice(0, 2000), nodes });
+  if (baselineRun >= 0) baselineRun++;             /* indices shift when we prepend */
+  if (runs.length > 12) runs.length = 12;
+  if (baselineRun >= runs.length) baselineRun = -1;
+  renderHistory(); scheduleSave();
+}
+
+function renderHistory() {
+  const el = $('runs'); if (!el) return;
+  if (!runs.length) { el.innerHTML = '<div class="tool-empty">run a flow to start a history</div>'; return; }
+  el.innerHTML = runs.map((r, i) => {
+    const base = i === baselineRun;
+    return '<div class="run-row' + (base ? ' base' : '') + '">' +
+      '<span class="run-out" title="output">' + esc(r.output) + '</span>' +
+      '<span class="run-in" title="' + escAttr(r.input) + '">' + esc(r.input) + '</span>' +
+      '<span class="run-model">' + esc(shortModel(r.model)) + '</span>' +
+      '<span class="run-acts">' +
+        '<button class="tb run-pin" data-i="' + i + '">' + (base ? '★ baseline' : 'pin') + '</button>' +
+        (baselineRun >= 0 && !base ? '<button class="tb run-diff" data-i="' + i + '">drift</button>' : '') +
+      '</span></div>';
+  }).join('');
+}
+
+/* Diff a run against the pinned baseline: which node outputs (and the final
+ * result) drifted. Same was/now rows as replay — reused on a saved snapshot. */
+function renderDrift(a, b) {
+  /* node ids align positionally; if the two runs aren't the same program, that
+   * alignment is approximate — say so rather than diffing unrelated nodes silently. */
+  const diffFlow = (a.flow && b.flow && a.flow !== b.flow) || (a.ir && b.ir && a.ir !== b.ir);
+  const ids = [...new Set([...Object.keys(a.nodes), ...Object.keys(b.nodes)])]
+    .sort((x, y) => parseInt(x.slice(1)) - parseInt(y.slice(1)));
+  const row = (k, av, bv) => {
+    const changed = av !== bv;
+    return '<div class="diff-row' + (changed ? ' changed' : '') + '"><span class="dr-k">' + esc(k) + '</span>' +
+      (changed
+        ? '<span class="dr-v"><span class="old"><span class="dr-tag">was</span>' + esc(av ?? '—') +
+          '</span><span class="new"><span class="dr-tag">now</span>' + esc(bv ?? '—') + '</span></span>'
+        : '<span class="dr-v dim">' + esc(bv ?? '—') + '</span>') + '</div>';
+  };
+  let html = '<div class="diff-head"><button type="button" class="diff-back">&larr; trace</button>' +
+    'drift &middot; baseline → this run' +
+    (diffFlow ? ' &middot; <span style="color:var(--warn)">different flow — alignment approximate</span>' : '') + '</div>';
+  for (const id of ids) html += row(((b.nodes[id] || a.nodes[id]).kind), (a.nodes[id] || {}).out, (b.nodes[id] || {}).out);
+  html += row('output', a.output, b.output);
+  $('trace').innerHTML = html;
+}
+
+/* Tool names the flow actually calls (anywhere: any binding, branch, or nested
+ * arg) — so cards for declared-but-uncalled tools can be flagged inert. */
+function toolsCalled(flow) {
+  const used = new Set();
+  (function walk(n) {
+    if (Array.isArray(n)) return n.forEach(walk);
+    if (n && typeof n === 'object') {
+      if (n.kind === 'call' && typeof n.tool === 'string') used.add(n.tool);
+      for (const k in n) walk(n[k]);
+    }
+  })(flow);
+  return used;
+}
+
+function renderTools(ir) {
+  let irObj;
+  try { irObj = JSON.parse(ir); } catch (e) { return; }
+  const tools = irObj.tools || [];
+  const used = toolsCalled(irObj.flows && irObj.flows[0]);
+  /* Fold each tool's full shape (params, output, effect level + model) into the
+   * signature — an effect/type change with the same name must repaint the card
+   * (and the badge that drives flowdServeTool's branch), not be skipped. */
+  const sig = tools.map(t => t.name + ':' + (t.input || []).map(p => p.type).join(',') +
+                             '->' + (t.output || '') + '/' + ((t.effect || {}).level || '') +
+                             ((t.effect || {}).model || '')).sort().join(',') + '|' + [...used].sort().join(',');
+  if (sig === renderedSig) return;                 /* same tools + usage: keep the cards (and focus) */
+  renderedSig = sig;
+
+  const names = new Set(tools.map(t => t.name));
+  for (const k of Object.keys(toolImpls))
+    if (!names.has(k)) { delete toolImpls[k]; delete toolValid[k]; delete toolDirty[k]; }
+
+  let defaults = {};
+  const dj = callOwned(flowd, 'flow_tool_defaults', [ir]);
+  if (dj) { try { defaults = JSON.parse(dj); } catch (e) {} }
+
+  let html = '';
+  for (const t of tools) {
+    if (!(t.name in toolImpls)) {                  /* prefill new tools, keep edits */
+      toolImpls[t.name] = JSON.stringify(defaults[t.name] ?? null, null, 1);
+      toolValid[t.name] = true; toolDirty[t.name] = false;
+    }
+    const sigStr = '(' + (t.input || []).map(p => p.name + ': ' + p.type).join(', ') +
+                   ') → ' + (t.output || '');
+    const lvl = (t.effect || {}).level || '';
+    const inert = !used.has(t.name);
+    html += `<div class="tool-card${inert ? ' unused' : ''}"><div class="tool-head">` +
+      `<span class="tool-name">${esc(t.name)}</span>` +
+      `<span class="tool-sig">${esc(sigStr)}</span>` +
+      `<span class="eff eff-${esc(lvl)}">${esc(lvl)}</span></div>` +
+      (inert ? '<div class="tool-note">not called by this flow — editing has no effect</div>' : '') +
+      `<textarea class="tool-impl${toolValid[t.name] === false ? ' invalid' : ''}" ` +
+      `rows="${Math.min(toolImpls[t.name].split('\n').length + 1, 12)}" ` +
+      `aria-invalid="${toolValid[t.name] === false}" ` +
+      `data-tool="${escAttr(t.name)}" spellcheck="false">${esc(toolImpls[t.name])}</textarea>` +
+      `<div class="tool-err">invalid JSON — using the type default</div></div>`;
+  }
+  $('tools').innerHTML = html || '<div class="tool-empty">this flow declares no tools</div>';
+}
+
+/* Replay — re-runs a recorded trace against your edited tool cards. Records a
+ * baseline against the *default* model, then re-runs that recorded trace with
+ * your edited tool cards via flowd_replay (model nodes re-invoked, everything
+ * else restored from the trace — never re-fired), and shows the node-by-node
+ * diff. Model-versioned replay only holds when the model's output doesn't feed
+ * a downstream restored node; when it does, flowd returns R157 and we surface
+ * it — the right, instructive answer. */
+/* Model tools the flow actually calls, in declaration order — replay re-invokes
+ * exactly these, served by their cards (a declared-but-uncalled model is ignored). */
+function usedModels(irObj) {
+  const used = toolsCalled(irObj.flows && irObj.flows[0]);
+  return (irObj.tools || []).filter(t => (t.effect || {}).level === 'model' && used.has(t.name));
+}
+function execDir(root, flow) {
+  try {
+    const e = flowd.FS.readdir(root + '/' + flow).find(n => n.startsWith('exec_'));
+    return e ? root + '/' + flow + '/' + e : null;
+  } catch (_) { return null; }
+}
+function nodeOutputs(execPath) {
+  const m = {};
+  try {
+    const dir = execPath + '/nodes';
+    for (const f of flowd.FS.readdir(dir).filter(n => n.endsWith('.json'))) {
+      const j = JSON.parse(flowd.FS.readFile(dir + '/' + f, { encoding: 'utf8' }));
+      m[j.node_id] = { kind: j.node_kind, mode: (j.replay_of || {}).mode,
+                       out: cmpVal(((j.invocations || [])[0] || {}).output) };
+    }
+  } catch (_) {}
+  return m;
+}
+function replayDiff() {
+  if (!lastIR) return;
+  if (apiKey) {                                      /* replay diffs edited cards vs the default model — it runs offline */
+    $('trace').innerHTML = '<div class="diag-msg">replay runs offline against the stub/default model and can\'t resolve live model() calls. ' +
+      'Clear the key to use replay, or click Run for the live model.</div>';
+    return;
+  }
+  const irObj = JSON.parse(lastIR), flow = lastFlow;
+  const models = usedModels(irObj);
+  const ids = [...new Set(models.map(t => (t.effect || {}).model).filter(Boolean))];
+  if (ids.length === 0) { $('trace').innerHTML = '<div class="diag-msg">this flow has no model() tool to replay against</div>'; return; }
+  if (ids.length > 1) {                                /* flowd_replay versions one model at a time */
+    $('trace').innerHTML = '<div class="diag-msg">replay re-runs against a single model; this flow calls ' +
+      ids.length + ' (' + esc(models.map(t => t.name).join(', ')) +
+      '). edit a card to re-run the flow normally instead.</div>'; return;
+  }
+  const mid = ids[0];
+  const raw = $('input').value.trim();                 /* replay re-runs with the live input — vet it too */
+  if (raw !== '') { try { JSON.parse(raw); } catch (_) {
+    $('trace').innerHTML = '<div class="diag-msg">--input is not valid JSON</div>'; return; } }
+
+  replayMode = true;                                 /* now sticky: editing a card re-diffs live (see the tools listener) */
+  $('ocount').innerHTML = '';                        /* a diff has no diagnostics; drop a prior run's count */
+  rmrf(flowd.FS, '/base'); rmrf(flowd.FS, '/rep');
+  const saved = globalThis.flowdServeTool;
+  globalThis.flowdServeTool = () => null;            /* baseline: the default model */
+  const baseOut = callOwned(flowd, 'flow_run_hosted', [lastIR, $('input').value, '/base']);
+  globalThis.flowdServeTool = saved;                 /* restore your edited cards */
+  const baseExec = execDir('/base', flow);
+  if (baseOut === null || !baseExec) {
+    replayMode = false;                              /* failed before a diff exists — don't trap edits in a replay loop */
+    $('trace').innerHTML = '<div class="diag-msg">baseline run failed</div>'; return;
+  }
+  const repOut = callOwned(flowd, 'flow_replay_hosted', [lastIR, flow, baseExec, '/rep', mid]);
+  if (repOut === null) {                              /* e.g. R157 — surface it */
+    replayMode = false;
+    $('trace').innerHTML = renderDiagnostics(flowd.ccall('flow_run_error', 'string', [], []), '').html;
+    return;
+  }
+  $('out').className = 'mono'; $('out').textContent = repOut;   /* output tracks the edited cards */
+  renderReplayDiff(baseExec, execDir('/rep', flow), models[0].name);
+}
+function renderReplayDiff(baseExec, repExec, modelName) {
+  const a = nodeOutputs(baseExec), b = nodeOutputs(repExec);
+  const ids = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+    .sort((x, y) => parseInt(x.slice(1)) - parseInt(y.slice(1)));
+  const back = '<button type="button" class="diff-back">&larr; trace</button>';
+  if (!ids.some(id => (a[id] || {}).out !== (b[id] || {}).out)) {
+    $('trace').innerHTML = '<div class="diff-head">' + back + 'replay &middot; no node differs</div>' +
+      '<div class="diag-msg">your cards still match the default model — edit <b>' + esc(modelName || 'a tool card') +
+      '</b> below and the diff updates as you type.</div>';
+    return;
+  }
+  const row = (k, mode, av, bv) => {
+    const changed = av !== bv;
+    const v = changed                                /* stack was/now: legible when wrapped, colorblind-safe */
+      ? `<span class="old"><span class="dr-tag">was</span>${esc(av ?? '—')}</span>` +
+        `<span class="new"><span class="dr-tag">now</span>${esc(bv ?? '—')}</span>`
+      : `<span class="dim">${esc(bv ?? '—')}</span>`;
+    return `<div class="diff-row${changed ? ' changed' : ''}">` +
+      `<span class="dr-k">${esc(k)}${mode ? ' · ' + esc(mode) : ''}</span>` +
+      `<span class="dr-v">${v}</span></div>`;
+  };
+  let html = '<div class="diff-head">' + back + 'replay &middot; default model → your edited cards</div>';
+  for (const id of ids) {
+    const av = a[id], bv = b[id];
+    html += row((bv || av).kind, (bv || {}).mode, av && av.out, bv && bv.out);
+  }
+  $('trace').innerHTML = html;
+}
+
+/* Suspension / inline approval — a flow that calls the built-in
+ * await_human_approval suspends instead of returning: the runtime seals a
+ * "suspended" trace and hands back a token. We render the decision form, then
+ * flowd_resume injects the human decision and writes a new, linked
+ * ("resumed_from") trace that completes the run. The decision must match the
+ * suspending tool's declared output type — a mismatch comes back as R155 and is
+ * surfaced in place. */
+let pendingToken = null;
+/* With a key, a suspending flow's pre-pause model calls resolve over several
+ * passes (see run()); suppress the approval form until they converge so it's
+ * drawn once, with real model values. suspCtx carries the last suspension's
+ * (ir, flowName, token) so run() can render the form after the loop. */
+let suppressSuspendForm = false, suspCtx = null;
+
+function execByStatus(flowName, want) {                    // the LATEST exec with a given status
+  const FS = flowd.FS, base = '/trace/' + flowName;
+  let best, bestAt = '';                                   // exec_ suffixes are random; rank by started_at (ISO sorts chronologically)
+  try {
+    for (const e of FS.readdir(base).filter(n => n.startsWith('exec_'))) {
+      try {
+        const m = JSON.parse(FS.readFile(base + '/' + e + '/manifest.json', { encoding: 'utf8' }));
+        if (m.status === want && (m.started_at || '') >= bestAt) { best = e; bestAt = m.started_at || ''; }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return best;
+}
+function renderSuspension(ir, flowName, token) {
+  pendingToken = token;
+  const tool = (JSON.parse(ir).tools || []).find(t => t.name === 'await_human_approval') || {};
+  let dflt = '{}';
+  try { dflt = JSON.stringify(JSON.parse(callOwned(flowd, 'flow_tool_defaults', [ir]))[tool.name] ?? {}, null, 1); }
+  catch (_) {}
+  $('out').className = '';
+  $('out').innerHTML =
+    '<div class="susp">' +
+      '<div class="susp-h">&#9208; suspended &middot; awaiting human approval</div>' +
+      '<div class="susp-sub">inject a decision of type <b>' + esc(tool.output || '?') + '</b> to resume</div>' +
+      '<textarea id="decision" class="tool-impl" spellcheck="false">' + esc(dflt) + '</textarea>' +
+      '<div class="susp-err" id="suspErr"></div>' +
+      '<div class="susp-btns"><button id="approve" class="susp-ok">approve &#10003;</button>' +
+      '<button id="reject" class="susp-no">reject &#10007;</button></div>' +
+    '</div>';
+  $('ocount').innerHTML = '';
+  $('approve').onclick = () => doResume(ir, flowName, true);
+  $('reject').onclick  = () => doResume(ir, flowName, false);
+  renderTrace(flowName, execByStatus(flowName, 'suspended'));     /* the partial trace, up to the pause */
+  const ae = document.activeElement;                             /* land the keyboard in the form, but */
+  if (!ae || !/^(TEXTAREA|INPUT)$/.test(ae.tagName)) $('decision').focus();  /* don't yank an active editor */
+}
+/* Approve and Reject differ in exactly one thing: the decision's yes/no verdict.
+ * The built-in Approval type calls that field `ok`, but someone writing their own
+ * gate may name it anything — so rather than hard-code `ok`, look at the suspending
+ * tool's declared output type and set the one boolean field it has (still favoring
+ * `ok` when present). If the decision is itself a bare bool, that bool *is* the
+ * verdict. And if the type has no single obvious boolean, we can't know which flag
+ * means "approved", so we send the decision exactly as typed and let the runtime
+ * type-check it — better than silently flipping the wrong field. (Before this, a
+ * differently-named field left Approve and Reject sending an identical decision,
+ * quietly throwing the human's choice away.) */
+function applyVerdict(dec, ir, ok) {
+  let tool, ty;
+  try {
+    const o = JSON.parse(ir);
+    tool = (o.tools || []).find(t => t.name === 'await_human_approval');
+    ty = tool && (o.types || []).find(t => t.name === tool.output);
+  } catch (_) {}
+  if (tool && tool.output === 'bool') return ok;             /* the decision is the verdict itself */
+  if (dec && typeof dec === 'object' && ty && ty.kind === 'record') {
+    const bools = (ty.fields || []).filter(f => f.type === 'bool').map(f => f.name);
+    const field = bools.includes('ok') ? 'ok' : (bools.length === 1 ? bools[0] : null);
+    if (field) dec[field] = ok;
+  }
+  return dec;
+}
+function doResume(ir, flowName, ok) {
+  const box = $('decision');
+  let dec;
+  try { dec = JSON.parse(box.value); }
+  catch (_) { box.classList.add('invalid'); box.setAttribute('aria-invalid', 'true'); return; }
+  box.classList.remove('invalid'); box.removeAttribute('aria-invalid');
+  dec = applyVerdict(dec, ir, ok);                /* set the decision's yes/no field from the button the human clicked */
+  const out = callOwned(flowd, 'flow_resume_hosted', [ir, pendingToken, JSON.stringify(dec), '/trace']);
+  if (out === null) {
+    const again = flowd.ccall('flow_suspension_token', 'string', [], []);
+    if (again) { renderSuspension(ir, flowName, again); return; }  /* suspended again -> re-prompt */
+    /* a wrong-typed decision (R155): keep the form on screen so it can be fixed */
+    $('suspErr').innerHTML = renderDiagnostics(flowd.ccall('flow_run_error', 'string', [], []), '').html;
+    box.focus();
+    return;
+  }
+  pendingToken = null;
+  $('out').className = 'mono';
+  $('out').textContent = out;
+  renderTrace(flowName, execByStatus(flowName, 'complete'));       /* the resumed, linked trace */
+  lastIR = ir; lastFlow = flowName;                /* the run completed — export / replay / history can use it now */
+  $('replay').disabled = !!apiKey;
+  snapshotCurrent();
+}
+
+/* ---- workspace: autosave, templates, reset, download, share ---- */
+let wsTimer;
+function saveWS() {
+  const overrides = {};
+  for (const n in toolImpls) if (toolDirty[n]) overrides[n] = toolImpls[n];
+  const ws = { src: $('src').value, input: $('input').value, model: curModel, overrides };
+  try {
+    localStorage.setItem(WS_KEY, JSON.stringify({ ...ws, runs, baselineRun }));
+  } catch (_) {                                      /* over quota (a big run history): keep the workspace, drop the bulky history */
+    try { localStorage.setItem(WS_KEY, JSON.stringify({ ...ws, runs: [], baselineRun: -1 })); } catch (_) {}
+  }
+}
+const scheduleSave = () => { clearTimeout(wsTimer); wsTimer = setTimeout(saveWS, 400); };
+
+function download(name, text, mime) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: mime || 'text/plain' }));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function flash(btn, label) {
+  const prev = btn.textContent; btn.textContent = label; btn.classList.add('done');
+  setTimeout(() => { btn.textContent = prev; btn.classList.remove('done'); }, 1100);
+}
+function loadTemplate(name) {
+  const t = TEMPLATES[name]; if (!t) return;
+  $('src').value = t.src; $('input').value = t.input;
+  toolImpls = {}; toolValid = {}; toolDirty = {}; renderedSig = ''; modelCache = {};   /* fresh cards + model cache for the new flow */
+  runs = []; baselineRun = -1; renderHistory();                       /* a different flow: drop old runs */
+  compileOnly(); saveWS();                                            /* show it; user clicks Run to execute */
+}
+function resetWorkspace() {
+  try { localStorage.removeItem(WS_KEY); } catch (_) {}
+  loadTemplate('triage'); flash($('reset'), 'reset');
+}
+function shareLink(btn) {
+  const w = { src: $('src').value, input: $('input').value, model: curModel };
+  /* base64 of the workspace JSON's UTF-8 bytes (TextEncoder, not the deprecated
+   * escape()), so a flow containing non-ASCII text shares correctly. btoa wants a
+   * byte-per-char "binary string", so walk the bytes through fromCharCode first. */
+  let bin = ''; for (const b of new TextEncoder().encode(JSON.stringify(w))) bin += String.fromCharCode(b);
+  const url = location.origin + location.pathname + location.search + '#w=' + btoa(bin);
+  if (url.length > 8000) { flash(btn, 'too big — use ↓ flow'); return; }   /* an oversized fragment truncates silently downstream */
+  navigator.clipboard.writeText(url).then(() => flash(btn, 'copied'), () => flash(btn, 'press ⌘C'));
+}
+
+/* The whole run as one file: source, input, model, output, and the full
+ * provenance (manifest + every node). The record you'd hand a reviewer, archive,
+ * or diff against a later run. Needs a clean run first (a trace to read). */
+function exportTrace() {
+  if (!lastFlow) { flash($('dltrace'), 'run first'); return; }
+  const bundle = { flow: $('src').value, input: $('input').value, model: curModel, output: $('out').textContent };
+  try {
+    const FS = flowd.FS;
+    const base = (replayMode ? '/rep/' : '/trace/') + lastFlow;   /* in a replay #out reflects the /rep run, so bundle that trace to stay self-consistent */
+    const exec = (!replayMode && execByStatus(lastFlow, 'complete')) || FS.readdir(base).find(n => n.startsWith('exec_'));
+    if (exec) {
+      const dir = base + '/' + exec;
+      bundle.manifest = JSON.parse(FS.readFile(dir + '/manifest.json', { encoding: 'utf8' }));
+      bundle.nodes = FS.readdir(dir + '/nodes').filter(n => n.endsWith('.json'))
+        .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)))
+        .map(f => JSON.parse(FS.readFile(dir + '/nodes/' + f, { encoding: 'utf8' })));
+    }
+  } catch (_) {}
+  download(lastFlow + '.run.json', JSON.stringify(bundle, null, 2), 'application/json');
+}
+
+/* A Flow output type -> a JSON Schema for structured output. Records, lists, and
+ * primitives map cleanly; anything else (sums) returns null and we prompt without
+ * a schema and let the runtime type-check (R155). */
+function typeToSchema(name, depth) {
+  if (depth > 6) return null;
+  const prim = { int: 'integer', float: 'number', string: 'string', bool: 'boolean' }[name];
+  if (prim) return { type: prim };
+  if (name && name[0] === '[' && name.endsWith(']')) {
+    const e = typeToSchema(name.slice(1, -1).trim(), depth + 1);
+    return e ? { type: 'array', items: e } : null;
+  }
+  const t = irTypes.find(x => x.name === name);
+  if (t && t.kind === 'record') {
+    const properties = {}, required = [];
+    for (const f of t.fields) {
+      const s = typeToSchema(f.type, depth + 1);
+      if (!s) return null;
+      properties[f.name] = s; required.push(f.name);
+    }
+    return { type: 'object', properties, required, additionalProperties: false };
+  }
+  return null;
+}
+
+/* One real model() call, browser-direct. Returns the tool's output as a JSON
+ * string (the runtime parses + type-checks it). Throws on an API/network error. */
+async function fetchModelOutput(p) {
+  const schema = typeToSchema(p.output, 0);
+  const body = {
+    model: curModel,
+    max_tokens: 1024,
+    system: 'You implement the tool `' + p.name + '` in a typed data pipeline. Infer its ' +
+            'behaviour from its name, decide the result for the given arguments, and return ' +
+            'only a JSON value of its declared output type' +
+            (schema ? '.' : ' (type: ' + p.output + ').'),
+    messages: [{ role: 'user', content: 'Arguments: ' + (p.args || '{}') }],
+  };
+  if (schema) body.output_config = { format: { type: 'json_schema', schema } };
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || ('HTTP ' + r.status));
+  const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  if (!text) throw new Error('model returned no content');
+  return text;
+}
+
+/* Show each model tool's real answer in its card (unless you've overridden it),
+ * read from this run's trace so it's exactly the value the flow used. */
+function fillModelCards() {
+  const byModel = {};
+  try {
+    const FS = flowd.FS, base = '/trace/' + lastFlow;
+    const exec = execByStatus(lastFlow, 'complete') || FS.readdir(base).find(n => n.startsWith('exec_'));
+    const dir = base + '/' + exec + '/nodes';
+    for (const f of FS.readdir(dir).filter(n => n.endsWith('.json'))) {
+      const j = JSON.parse(FS.readFile(dir + '/' + f, { encoding: 'utf8' }));
+      if (j.node_kind === 'model_call' && j.model)
+        byModel[j.model] = ((j.invocations || [])[0] || {}).output;   /* the raw {inline|ref} value, not a display string */
+    }
+  } catch (_) {}
+  for (const name in irTools) {
+    const t = irTools[name];
+    if (t.level !== 'model' || toolDirty[name]) continue;
+    const out = byModel[t.model];
+    /* A card holds the JSON a tool returns, so only an inline value can fill one.
+     * If the answer was huge and the runtime stored it by reference (all we have
+     * here is its hash), there's no JSON to paste — leave the stub rather than
+     * drop a hash into a box the user might then try to edit. */
+    if (!out || out.inline === undefined) continue;
+    const v = JSON.stringify(out.inline);
+    const ta = document.querySelector('.tool-impl[data-tool="' + name + '"]');
+    if (ta && document.activeElement === ta) continue;   /* card being edited: don't desync state from the visible text */
+    toolImpls[name] = v; toolValid[name] = true;
+    if (ta) ta.value = v;
+  }
+}
+
+/* The Run button. With a key, model() tools call Claude — but the runtime drives
+ * the host synchronously, so we can't await a fetch mid-run. Instead: run (uncached
+ * model calls decline to a stub and get recorded), fetch those for real, cache, and
+ * re-run. Each pass resolves one layer of model calls with correct inputs; chained
+ * models converge in a few passes. Without a key it's just the offline runAll(). */
+async function run() {
+  if (!apiKey) { runAll(); if (lastIR) snapshotCurrent(); return; }
+  const btn = $('run'), label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'running…';
+  let err = null;
+  suspCtx = null; suppressSuspendForm = true;        /* hold the approval form until pre-pause model calls resolve */
+  try {
+    for (let pass = 0; pass < 8 && !err; pass++) {
+      realPending = []; suspCtx = null;
+      runAll();
+      const todo = [...new Map(realPending.map(p => [p.key, p])).values()];
+      if (!todo.length) break;                       /* converged: completed, errored, or a fully-resolved suspension */
+      const out = await Promise.allSettled(todo.map(fetchModelOutput));
+      out.forEach((res, i) => {
+        if (res.status === 'fulfilled') modelCache[todo[i].key] = res.value;
+        else { delete modelCache[todo[i].key]; err = err || res.reason; }   /* never cache null: a failed fetch must retry, not stub forever */
+      });
+    }
+  } finally { suppressSuspendForm = false; btn.disabled = false; btn.textContent = label; }
+  if (err) {
+    $('out').className = '';
+    $('out').innerHTML = '<div class="diag-msg">model call failed: ' + esc(String(err.message || err)) + '</div>';
+    $('ocount').innerHTML = '';
+    return;
+  }
+  if (suspCtx) { renderSuspension(suspCtx.ir, suspCtx.flowName, suspCtx.token); return; }   /* draw the form once, with resolved values */
+  if (lastIR) { fillModelCards(); snapshotCurrent(); }
+}
+
+/* Compile the source and render IR + tools + the input-type label — but don't
+ * execute. Returns { ir, flowName } or null (after rendering a compile error). */
+function compileAndRender() {
+  $('out').className = 'mono';
+  $('ocount').innerHTML = '';
+  lastIR = null; lastFlow = null; replayMode = false; $('replay').disabled = true;   /* re-enabled only on a clean run */
+
+  const ir = callOwned(flowc, 'flow_compile', [$('src').value]);
+  if (ir === null) {
+    $('ir').textContent = '—';
+    $('out').className = '';
+    const d = renderDiagnostics(
+      flowc.ccall('flow_compile_error', 'string', [], []), $('src').value);
+    $('out').innerHTML = d.html;
+    $('ocount').innerHTML = diagCount(d.counts);
+    $('trace').innerHTML = '<div class="trace-row"><span class="k">—</span></div>';
+    return null;
+  }
+  $('ir').innerHTML = highlightJSON(ir);
+  renderTools(ir);                                 /* the editable host panel */
+
+  const irObj = JSON.parse(ir);
+  irTypes = irObj.types || [];
+  irTools = {};
+  for (const t of irObj.tools || []) irTools[t.name] = { level: (t.effect || {}).level, output: t.output, model: (t.effect || {}).model };
+  const flow = irObj.flows[0] || {};
+  const flowName = flow.name || 'flow';
+  /* Self-document the box with the type the flow expects — its implicit param
+   * (the `it` binding) if present, else its first param — e.g. "--input int". */
+  const inParam = (flow.params || []).find(p => p.implicit) || (flow.params || [])[0];
+  $('intype').innerHTML = '--input' + (inParam ? ' <b>' + esc(inParam.type) + '</b>' : '');
+  return { ir, flowName };
+}
+
+/* Page load and template switches compile + show the flow but DON'T run it — so a
+ * suspending flow never pops its approval form before you click Run. */
+function compileOnly() {
+  if (!compileAndRender()) return;
+  $('out').textContent = '—';
+  $('trace').innerHTML = '<div class="trace-row"><span class="k">click compile &amp; run</span></div>';
+}
+
+function runAll() {
+  const c = compileAndRender();
+  if (!c) return;
+  const { ir, flowName } = c;
+
+  /* Validate the input as JSON here — an earlier, clearer signal than flowd's
+   * runtime parse error, and it points at the box rather than the program. */
+  const raw = $('input').value.trim();
+  let inputOk = true;
+  if (raw !== '') { try { JSON.parse(raw); } catch (e) { inputOk = false; } }
+  $('input').classList.toggle('invalid', !inputOk);
+  $('input').setAttribute('aria-invalid', String(!inputOk));
+  if (!inputOk) {
+    $('out').className = '';
+    $('out').innerHTML = '<div class="diag-msg">--input is not valid JSON</div>';
+    $('trace').innerHTML = '<div class="trace-row"><span class="k">—</span></div>';
+    return;
+  }
+
+  rmrf(flowd.FS, '/trace');                       /* one run's trace at a time */
+  pendingToken = null;
+  const out = callOwned(flowd, 'flow_run_hosted', [ir, $('input').value, '/trace']);
+  if (out === null) {
+    const token = flowd.ccall('flow_suspension_token', 'string', [], []);
+    if (token) {                                     /* paused for a human */
+      suspCtx = { ir, flowName, token };
+      if (suppressSuspendForm) { pendingToken = token; return; }   /* keyed run: run() draws the form once model calls converge */
+      renderSuspension(ir, flowName, token);
+      return;
+    }
+    $('out').className = '';
+    const d = renderDiagnostics(flowd.ccall('flow_run_error', 'string', [], []), '');
+    $('out').innerHTML = d.html;
+    $('ocount').innerHTML = diagCount(d.counts);
+    return;
+  }
+  $('out').textContent = out;
+  renderTrace(flowName);
+  lastIR = ir; lastFlow = flowName;                /* a clean run: replay can diff against it */
+  $('replay').disabled = !!apiKey;                 /* replay is offline-only — it can't resolve live model() calls */
+}
+
+Promise.all([createFlowc(), createFlowd()]).then(([c, d]) => {
+  flowc = c; flowd = d;
+  curModel = $('model').value || curModel;          /* model restored from the workspace */
+  /* Restored card overrides win over the stub defaults. bootWS can come from a
+   * shared link's #w= fragment (which anyone could hand-craft) as well as from your
+   * own saved session — but every override is only ever shown as escaped text and
+   * parsed as JSON before use, so a hostile link can pre-fill a card, never run code. */
+  if (bootWS && bootWS.overrides)
+    for (const n in bootWS.overrides) { toolImpls[n] = bootWS.overrides[n]; toolDirty[n] = true; }
+  if (bootWS && Array.isArray(bootWS.runs)) {       /* run history + baseline survive a reload */
+    runs = bootWS.runs;
+    baselineRun = (Number.isInteger(bootWS.baselineRun) && bootWS.baselineRun >= 0 &&
+                   bootWS.baselineRun < runs.length) ? bootWS.baselineRun : -1;
+  }
+  renderHistory();
+
+  /* The JS-backed host: flow_run_hosted asks this for each tool's output.
+   *  - an edited card always wins (your override / what-if);
+   *  - else a model() tool with a key set is answered by Claude — served from
+   *    modelCache, or recorded in realPending and stubbed for now (run() fetches
+   *    it and re-runs);
+   *  - else the card's JSON (offline default). Declining (null) for an unknown or
+   *    invalid card falls back to the type-directed stub, so it degrades safely. */
+  globalThis.flowdServeTool = (name, argsJson) => {
+    const card = (name in toolImpls && toolValid[name] !== false) ? toolImpls[name] : null;
+    if (toolDirty[name]) return card;                          /* explicit override */
+    const t = irTools[name];
+    if (apiKey && t && t.level === 'model') {
+      /* key by everything that shapes the answer — model, tool, its model id and
+       * output type, and the args — so a type/model change isn't served a stale value. */
+      const key = curModel + '|' + name + '|' + (t.model || '') + '|' + (t.output || '') + '|' + (argsJson || '');
+      if (key in modelCache && modelCache[key] !== null) return modelCache[key];   /* a null is a failed fetch, not an answer */
+      realPending.push({ key, name, args: argsJson, output: t.output });
+      return null;                                             /* stub this pass; run() resolves it */
+    }
+    return card;
+  };
+
+  const btn = $('run');
+  btn.textContent = 'compile & run';
+  btn.disabled = false;
+  btn.onclick = run;
+  $('replay').onclick = replayDiff;               /* runAll enables/disables it per run */
+
+  /* A key switches on real model() calls; while one is set, live auto-run is off
+   * (model calls cost money — they fire only on Run). The key stays in this tab's
+   * memory only. */
+  $('apikey').addEventListener('input', e => {
+    apiKey = e.target.value.trim();
+    $('live').disabled = !!apiKey;
+    $('replay').disabled = !lastIR || !!apiKey;      /* replay is offline-only */
+  });
+  $('model').addEventListener('change', e => { curModel = e.target.value; scheduleSave(); });
+
+  /* Editor toolbar: load a starter flow, download the source, copy a share link,
+   * export a runnable harness, or reset to a fresh sample. */
+  $('template').addEventListener('change', e => { loadTemplate(e.target.value); e.target.selectedIndex = 0; });
+  $('dlflow').onclick = () => download((lastFlow || 'flow') + '.flow', $('src').value, 'text/plain');
+  $('sharelink').onclick = () => shareLink($('sharelink'));
+  $('dlcode').onclick = () => exportCode();
+  $('reset').onclick = resetWorkspace;
+  $('dltrace').onclick = exportTrace;
+  $('codeShape').addEventListener('change', renderCode);
+  $('codeCopy').onclick = () => navigator.clipboard.writeText($('codeBody').textContent).then(() => flash($('codeCopy'), 'copied'));
+  $('codeDl').onclick = () => download((lastFlow || 'flow') + '.py', $('codeBody').textContent, 'text/x-python');
+  $('codeClose').onclick = () => { $('codeModal').hidden = true; };
+  $('codeModal').addEventListener('click', e => { if (e.target === $('codeModal')) $('codeModal').hidden = true; });
+
+  /* Live: recompile + rerun shortly after typing pauses. Compile and run are
+   * synchronous in-memory WASM calls with no network, so output, IR, and trace
+   * track the keystrokes — the page behaves like a REPL, not a form. The "live"
+   * toggle (on by default) gates only this auto-recompile-on-typing; the
+   * compile & run button always runs regardless of the toggle. */
+  let timer;
+  const live = () => {
+    scheduleSave();                                  /* autosave the workspace on every edit */
+    if (apiKey) {                                    /* with a key, recompile to refresh IR/tools (and drop a stale replay), but never auto-fire a paid model call */
+      clearTimeout(timer); timer = setTimeout(compileOnly, 250); return;
+    }
+    if (!$('live').checked) return;
+    clearTimeout(timer); timer = setTimeout(runAll, 250);
+  };
+  /* In replay mode the same debounce re-runs the diff, so editing a card updates
+   * the before/after live instead of reverting the panel to a plain trace. */
+  const replaySoon = () => {
+    if (apiKey || !$('live').checked) return;
+    clearTimeout(timer); timer = setTimeout(replayDiff, 250);
+  };
+  $('src').addEventListener('input', live);
+  $('input').addEventListener('input', live);
+  $('input').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('run').disabled) { clearTimeout(timer); run(); } });
+  /* Turning "live" back on re-syncs immediately, so the panes reflect any
+   * edits made while it was off without waiting for the next keystroke. */
+  $('live').addEventListener('change', () => { if ($('live').checked) runAll(); });
+
+  /* Editing a tool card updates its output and re-runs; the tool set is
+   * unchanged so renderTools won't rebuild the cards (focus is preserved). */
+  $('tools').addEventListener('input', e => {
+    const ta = e.target.closest('.tool-impl');
+    if (!ta) return;
+    const name = ta.dataset.tool;
+    toolImpls[name] = ta.value;
+    toolDirty[name] = ta.value.trim() !== '';        /* a non-empty edit overrides; clear the card to revert to the model/stub */
+    let ok = true;
+    try { JSON.parse(ta.value); } catch (_) { ok = false; }
+    toolValid[name] = ok;
+    ta.classList.toggle('invalid', !ok);
+    ta.setAttribute('aria-invalid', String(!ok));
+    scheduleSave();
+    if (replayMode) replaySoon(); else live();      /* keep a live diff updating as you edit */
+  });
+
+  /* One delegated listener for every "did you mean" quick-fix button. */
+  $('out').addEventListener('click', e => {
+    const b = e.target.closest('.qf');
+    if (b) applyQuickFix(b.dataset.line, b.dataset.col, b.dataset.token, b.dataset.fix);
+  });
+  /* Click a node chip to inspect what flowed through it. */
+  $('trace').addEventListener('click', e => {
+    if (e.target.closest('.diff-back')) {
+      replayMode = false;
+      if (lastFlow) renderTrace(lastFlow);
+      else $('trace').innerHTML = '<div class="trace-row"><span class="k">run a flow to record a trace</span></div>';
+      return;
+    }
+    const el = e.target.closest('.pnode');
+    if (el) showNodeDetail(+el.dataset.i);
+  });
+
+  /* Run history: pin a baseline (click again to unpin); diff a later run against
+   * it to see what drifted. */
+  $('runs').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const i = +b.dataset.i;
+    if (b.classList.contains('run-pin')) { baselineRun = baselineRun === i ? -1 : i; renderHistory(); scheduleSave(); }
+    else if (b.classList.contains('run-diff') && runs[baselineRun] && runs[i]) {
+      replayMode = false; renderDrift(runs[baselineRun], runs[i]);
+    }
+  });
+
+  /* Copy the IR JSON. textContent strips the highlight spans, so the clipboard
+   * gets clean JSON. Brief "copied" confirmation; no-op on the placeholder. */
+  $('ircopy').addEventListener('click', () => {
+    const ir = $('ir').textContent;
+    if (!ir || ir === '—') return;
+    navigator.clipboard.writeText(ir).then(() => {
+      const b = $('ircopy');
+      b.textContent = 'copied'; b.classList.add('done');
+      setTimeout(() => { b.textContent = 'copy'; b.classList.remove('done'); }, 1200);
+    }).catch(() => {});
+  });
+
+  compileOnly();                                   /* show the compiled flow; the user clicks Run to execute */
+});
+</script>
+</body>
+</html>

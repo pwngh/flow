@@ -1,0 +1,2 @@
+type User = { id: string }
+type User = { name: string }

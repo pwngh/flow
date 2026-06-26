@@ -1,0 +1,218 @@
+.TH FLOW-IR 5 "May 2026" "" "Flow Manual"
+.SH NAME
+flow-ir \- the Flow IR JSON schema
+.SH DESCRIPTION
+The Flow intermediate representation is a JSON document the
+compiler emits and the runtime consumes.  It is the durable
+contract between authoring and execution: the source language
+may evolve, runtime implementations may be replaced, but a v1.0
+IR document remains loadable by every v1.x runtime.  The
+document is byte-deterministic for a given input.
+.SH TOP-LEVEL SHAPE
+.RS
+.nf
+{
+  "ir_version":  "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "path/to/input.flow",
+  "types":       [ ... ],
+  "tools":       [ ... ],
+  "flows":       [ ... ]
+}
+.fi
+.RE
+.PP
+.B ir_version
+identifies the schema version.  v1.0 is the locked v1 contract;
+v1.x is additive and backwards-compatible.
+.PP
+.B compiled_at
+is an RFC 3339 UTC timestamp.  It honors
+.B SOURCE_DATE_EPOCH
+so identical sources under pinned toolchains produce byte-
+identical IR.  The test driver pins it to zero.
+.PP
+.B source_file
+is the input path as it appeared on the command line.
+.PP
+.BR types ,
+.BR tools ,
+and
+.B flows
+are arrays of declarations in source order.
+.SH TYPE ENCODING
+A type reference in any position (field type, parameter type,
+return type) is encoded as a string:
+.IP \(bu 2
+Primitive:
+.BR \(dqstring\(dq ,
+.BR \(dqint\(dq ,
+.BR \(dqfloat\(dq ,
+.BR \(dqbool\(dq .
+.IP \(bu 2
+Named user type: the bare identifier, e.g.
+.BR \(dqApplication\(dq .
+.IP \(bu 2
+List:
+.BR \(dq[T]\(dq
+with brackets around the element type's string form.  Nested lists
+render as
+.BR \(dq[[T]]\(dq .
+.SH RECORD TYPES
+.RS
+.nf
+{
+  "name":   "Application",
+  "kind":   "record",
+  "fields": [
+    {"name": "applicant_id", "type": "string"},
+    {"name": "amount",       "type": "float"}
+  ]
+}
+.fi
+.RE
+.PP
+The
+.B kind
+field is
+.BR \(dqrecord\(dq .
+The
+.B fields
+array gives field names and types in source order.
+.SH SUM TYPES
+.RS
+.nf
+{
+  "name": "Hypothesis",
+  "kind": "sum",
+  "variants": [
+    {
+      "name":   "DeployCaused",
+      "fields": [
+        {"name": "suspect_deploy_id", "type": "string"},
+        {"name": "diff_url",          "type": "string"}
+      ]
+    },
+    {
+      "name":   "Unknown",
+      "fields": [
+        {"name": "confidence", "type": "float"}
+      ]
+    }
+  ]
+}
+.fi
+.RE
+.PP
+.B kind
+is
+.BR \(dqsum\(dq .
+The
+.B variants
+array lists variants in source order; each carries its own
+fields list.
+.SH TOOLS
+.RS
+.nf
+{
+  "name":   "fetch_credit",
+  "input":  [{"name": "id", "type": "string"}],
+  "output": "CreditHistory",
+  "effect": { "level": "deterministic" }
+}
+.fi
+.RE
+.PP
+.B effect.level
+is one of
+.BR \(dqpure\(dq ,
+.BR \(dqdeterministic\(dq ,
+.BR \(dqmodel\(dq ,
+.BR \(dqmutation\(dq .
+Model-level tools carry an additional
+.B effect.model
+field naming the configured model, e.g.
+.BR "\(dqeffect\(dq: { \(dqlevel\(dq: \(dqmodel\(dq, \(dqmodel\(dq: \(dqrisk-v1\(dq }" .
+.PP
+A non-default retry policy, if the source declares one, is emitted as an
+.B effect.retry
+object:
+.BR "{\(dqkind\(dq: \(dqforever\(dq}" ,
+.BR "{\(dqkind\(dq: \(dqcount\(dq, \(dqvalue\(dq: 3}" ,
+or
+.BR "{\(dqkind\(dq: \(dqbackoff\(dq, \(dqinitial\(dq: 100, \(dqmax\(dq: 5000, \(dqfactor\(dq: 2}" .
+The clause is omitted entirely when the tool uses the default policy.
+.SH FLOWS
+.RS
+.nf
+{
+  "name":   "signup",
+  "params": [
+    {"name": "it", "type": "SignupRequest", "implicit": true}
+  ],
+  "output": "SignupResult",
+  "bindings": [
+    {"name": "customer", "expr": { ... }}
+  ],
+  "return": { ... }
+}
+.fi
+.RE
+.PP
+.B params
+lists the flow's parameters in source order; the implicit
+.B it
+parameter is flagged with
+.BR "\(dqimplicit\(dq: true" .
+.B output
+is the return type's string form.
+.B bindings
+is the ordered list of
+.RB \(dq name \(dq/\(dq expr \(dq
+pairs from the flow body, and
+.B return
+is the flow's final return expression.
+.PP
+Each expression is a tagged node with a
+.B kind
+field \(em for example
+.BR \(dqpath\(dq
+(with a
+.B segments
+array),
+.BR \(dqcall\(dq
+(with
+.B tool
+and
+.BR args ),
+.BR \(dqconstruct\(dq
+(with
+.B type
+and
+.BR fields ),
+or
+.BR \(dqpipeline\(dq .
+A pipeline node carries a
+.B source
+expression and a
+.B stages
+array, each stage being a record with its own
+.BR kind ,
+.BR op ,
+and operator-specific fields.
+The compiler's IR preserves the source's logical structure;
+flattening to the runtime's execution graph (one record per
+node, with stable
+.B node_id
+fields) is the runtime's job and produces the trace records
+described elsewhere.
+.SH DETERMINISM
+The emitter is single-pass and writes JSON with fixed key order
+(no hashtable iteration on output).  Floats render via
+.B %g
+under
+.B LC_NUMERIC=C
+to guarantee the same bytes on every locale.  An identical
+source file produces an identical IR document, byte for byte,
+across machines and across builds of the compiler under the
+same toolchain.

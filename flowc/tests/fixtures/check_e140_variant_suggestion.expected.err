@@ -1,0 +1,1 @@
+tests/fixtures/check_e140_variant_suggestion.flow:8:25: error[E140]: no field 'suspect_deploy_ix' on variant 'DeployCaused'; did you mean 'suspect_deploy_id'?

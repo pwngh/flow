@@ -1,0 +1,421 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Flow",
+  "scopeName": "source.flow",
+  "fileTypes": ["flow"],
+
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#illegal-byte" },
+    { "include": "#type-decl" },
+    { "include": "#tool-decl" },
+    { "include": "#flow-decl" },
+    { "include": "#effect-clause" },
+    { "include": "#arrow" },
+    { "include": "#string" },
+    { "include": "#type-expression" }
+  ],
+
+  "repository": {
+
+    "comment": {
+      "name": "comment.line.number-sign.flow",
+      "match": "#.*$"
+    },
+
+    "illegal-byte": {
+      "name": "invalid.illegal.non-ascii.flow",
+      "match": "[\\x80-\\xff]"
+    },
+
+    "arrow": {
+      "name": "keyword.operator.arrow.flow",
+      "match": "->"
+    },
+
+    "string": {
+      "name": "string.quoted.double.flow",
+      "begin": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.flow" } },
+      "end": "\"",
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.flow" } },
+      "patterns": [
+        { "name": "constant.character.escape.flow", "match": "\\\\." }
+      ]
+    },
+
+    "type-decl": {
+      "comment": "type Name = { ... }   (record)   and   type Name = | A { ... } | B { ... }   (sum). The `=` is required. The region runs to the next top-level declaration so multi-line records and sums are covered.",
+      "name": "meta.declaration.type.flow",
+      "begin": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)",
+      "beginCaptures": {
+        "1": { "name": "storage.type.type.flow" },
+        "2": { "name": "entity.name.type.declaration.flow" },
+        "3": { "name": "keyword.operator.assignment.flow" }
+      },
+      "end": "(?=^\\s*(?:type|tool|flow)\\b)",
+      "patterns": [
+        { "include": "#comment" },
+        { "name": "punctuation.separator.variant.flow", "match": "\\|" },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "variable.other.member.declaration.flow" },
+            "2": { "name": "punctuation.separator.type-annotation.flow" }
+          }
+        },
+        { "include": "#type-expression" },
+        { "name": "punctuation.section.braces.begin.flow", "match": "\\{" },
+        { "name": "punctuation.section.braces.end.flow",   "match": "\\}" },
+        { "name": "punctuation.separator.comma.flow",      "match": "," }
+      ]
+    },
+
+    "tool-decl": {
+      "name": "meta.declaration.tool.flow",
+      "begin": "\\b(tool)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+      "beginCaptures": {
+        "1": { "name": "storage.type.tool.flow" },
+        "2": { "name": "entity.name.function.tool.flow" },
+        "3": { "name": "punctuation.section.parens.begin.flow" }
+      },
+      "end": "(\\))",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.parens.end.flow" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "variable.parameter.flow" },
+            "2": { "name": "punctuation.separator.type-annotation.flow" }
+          }
+        },
+        { "include": "#type-expression" },
+        { "name": "punctuation.separator.comma.flow", "match": "," }
+      ]
+    },
+
+    "effect-clause": {
+      "comment": "The mandatory effect clause that follows a tool's return type: `effect deterministic`, `effect model(\"id\")`, with an optional `(retry: forever | N | backoff(initial: N, max: N, factor: N))`.",
+      "patterns": [
+        { "name": "keyword.other.effect.flow",            "match": "\\b(effect)\\b" },
+        { "name": "storage.modifier.effect-level.flow",   "match": "\\b(pure|deterministic|mutation|model)\\b" },
+        { "name": "keyword.other.retry.flow",             "match": "\\b(retry|forever|backoff|initial|max|factor)\\b" },
+        { "include": "#string" },
+        { "include": "#numbers" }
+      ]
+    },
+
+    "flow-decl": {
+      "comment": "A flow declaration as a whole. The outer begin matches just `flow Name`; sub-patterns handle the three regions (params, return type, body) so each can scope identifiers correctly — types in signature, values in body. End uses a zero-width lookbehind so it fires after the body's } is consumed by #flow-body.",
+      "name": "meta.declaration.flow.flow",
+      "begin": "\\b(flow)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "beginCaptures": {
+        "1": { "name": "storage.type.flow.flow" },
+        "2": { "name": "entity.name.function.flow.flow" }
+      },
+      "end": "(?<=\\})",
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#flow-params" },
+        { "include": "#flow-return-type" },
+        { "include": "#flow-body" }
+      ]
+    },
+
+    "flow-params": {
+      "comment": "Parenthesized param list of a flow declaration. Implicit-it form is a bare type (e.g. `(SignupRequest)`); explicit form is `(name: T, name: T)`. Either way, every identifier inside is in type position once param names are consumed.",
+      "begin": "(\\()",
+      "beginCaptures": {
+        "1": { "name": "punctuation.section.parens.begin.flow" }
+      },
+      "end": "(\\))",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.parens.end.flow" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "variable.parameter.flow" },
+            "2": { "name": "punctuation.separator.type-annotation.flow" }
+          }
+        },
+        { "include": "#type-expression" },
+        { "name": "punctuation.separator.comma.flow", "match": "," }
+      ]
+    },
+
+    "flow-return-type": {
+      "comment": "The `-> Type` clause between the param list and the body. Type-only context, so type-expression is the only thing included. Ends at the lookahead for the body's opening brace.",
+      "begin": "(->)",
+      "beginCaptures": {
+        "1": { "name": "keyword.operator.arrow.flow" }
+      },
+      "end": "(?=\\{)",
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#type-expression" }
+      ]
+    },
+
+    "flow-body": {
+      "comment": "The `{ ... }` body of a flow declaration. Value context only — type-expression is intentionally NOT included so `create_user` in `user = create_user(it.email)` is matched as a call, not a type.",
+      "begin": "(\\{)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.section.braces.begin.flow" }
+      },
+      "end": "(\\})",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.braces.end.flow" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        {
+          "comment": "Binding LHS: name = expr. Negative lookahead avoids matching the first = of ==.",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(=)(?!=)",
+          "captures": {
+            "1": { "name": "variable.other.binding.flow" },
+            "2": { "name": "keyword.operator.assignment.flow" }
+          }
+        },
+        { "include": "#expression" }
+      ]
+    },
+
+    "type-expression": {
+      "patterns": [
+        { "include": "#primitive-type" },
+        { "include": "#list-type" },
+        { "include": "#named-type" }
+      ]
+    },
+
+    "primitive-type": {
+      "name": "storage.type.primitive.flow",
+      "match": "\\b(string|int|float|bool)\\b"
+    },
+
+    "list-type": {
+      "begin": "(\\[)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.section.brackets.begin.flow" }
+      },
+      "end": "(\\])",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.brackets.end.flow" }
+      },
+      "patterns": [
+        { "include": "#type-expression" }
+      ]
+    },
+
+    "named-type": {
+      "comment": "An identifier in type position. Excludes the four primitive type keywords so they don't double-match.",
+      "name": "entity.name.type.flow",
+      "match": "\\b(?!string\\b|int\\b|float\\b|bool\\b)[A-Za-z_][A-Za-z0-9_]*\\b"
+    },
+
+    "expression": {
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#illegal-byte" },
+        { "include": "#string" },
+        { "include": "#control-keywords" },
+        { "include": "#match-arrow" },
+        { "include": "#stage-rank" },
+        { "include": "#stage-pick" },
+        { "include": "#stage-keywords" },
+        { "include": "#logical-ops" },
+        { "include": "#comparison-ops" },
+        { "include": "#arithmetic-ops" },
+        { "include": "#sort-direction" },
+        { "include": "#pipe" },
+        { "include": "#constants" },
+        { "include": "#numbers" },
+        { "include": "#named-arg" },
+        { "include": "#it" },
+        { "include": "#row" },
+        { "include": "#call" },
+        { "include": "#construct" },
+        { "include": "#field-access" },
+        { "include": "#identifier" },
+        { "include": "#punctuation" }
+      ]
+    },
+
+    "control-keywords": {
+      "comment": "Conditional, match, and try/else control keywords.",
+      "name": "keyword.control.flow.flow",
+      "match": "\\b(if|then|else|match|try)\\b"
+    },
+
+    "match-arrow": {
+      "comment": "The `->` separating a match-arm pattern from its body.",
+      "name": "keyword.operator.arrow.match.flow",
+      "match": "->"
+    },
+
+    "stage-rank": {
+      "comment": "rank <field> (asc|desc) — captured as one stage so the field gets variable.other.member and the direction gets keyword.other.sort.",
+      "match": "\\b(rank)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(asc|desc)\\b",
+      "captures": {
+        "1": { "name": "keyword.control.pipeline.rank.flow" },
+        "2": { "name": "variable.other.member.flow" },
+        "3": { "name": "keyword.other.sort.flow" }
+      }
+    },
+
+    "stage-pick": {
+      "comment": "pick using <model-name> — captured as one stage so the model name gets a distinct scope.",
+      "match": "\\b(pick)\\s+(using)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "keyword.control.pipeline.pick.flow" },
+        "2": { "name": "keyword.control.pipeline.using.flow" },
+        "3": { "name": "entity.name.function.model.flow" }
+      }
+    },
+
+    "stage-keywords": {
+      "comment": "Pipeline stage keywords. Full multi-token stages (rank/pick) are handled above; these cover the rest and serve as fallbacks when a stage is split across lines.",
+      "patterns": [
+        { "name": "keyword.control.pipeline.where.flow",   "match": "\\b(where)\\b" },
+        { "name": "keyword.control.pipeline.rank.flow",    "match": "\\b(rank)\\b" },
+        { "name": "keyword.control.pipeline.select.flow",  "match": "\\b(select)\\b" },
+        { "name": "keyword.control.pipeline.dedupe.flow",  "match": "\\b(dedupe)\\b" },
+        { "name": "keyword.control.pipeline.concat.flow",  "match": "\\b(concat)\\b" },
+        { "name": "keyword.control.pipeline.take.flow",    "match": "\\b(take)\\b" },
+        { "name": "keyword.control.pipeline.top.flow",     "match": "\\b(top)\\b" },
+        { "name": "keyword.control.pipeline.pick.flow",    "match": "\\b(pick)\\b" },
+        { "name": "keyword.control.pipeline.using.flow",   "match": "\\b(using)\\b" },
+        { "name": "keyword.control.pipeline.count.flow",   "match": "\\b(count)\\b" },
+        { "name": "keyword.control.pipeline.sum.flow",     "match": "\\b(sum)\\b" },
+        { "name": "keyword.control.pipeline.max.flow",     "match": "\\b(max)\\b" },
+        { "name": "keyword.control.pipeline.min.flow",     "match": "\\b(min)\\b" },
+        { "name": "keyword.control.pipeline.any.flow",     "match": "\\b(any)\\b" },
+        { "name": "keyword.control.pipeline.all.flow",     "match": "\\b(all)\\b" },
+        { "name": "keyword.control.pipeline.by.flow",      "match": "\\b(by)\\b" }
+      ]
+    },
+
+    "sort-direction": {
+      "name": "keyword.other.sort.flow",
+      "match": "\\b(asc|desc)\\b"
+    },
+
+    "logical-ops": {
+      "name": "keyword.operator.logical.flow",
+      "match": "\\b(and|or|not)\\b"
+    },
+
+    "comparison-ops": {
+      "comment": "Two-character operators listed before single-character so == isn't split.",
+      "name": "keyword.operator.comparison.flow",
+      "match": "==|!=|<=|>=|<|>"
+    },
+
+    "arithmetic-ops": {
+      "name": "keyword.operator.arithmetic.flow",
+      "match": "\\+|\\-|\\*|/|%"
+    },
+
+    "pipe": {
+      "name": "keyword.operator.pipeline.flow",
+      "match": "\\|"
+    },
+
+    "constants": {
+      "name": "constant.language.boolean.flow",
+      "match": "\\b(true|false)\\b"
+    },
+
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.float.flow",   "match": "\\b[0-9]+\\.[0-9]+\\b" },
+        { "name": "constant.numeric.integer.flow", "match": "\\b[0-9]+\\b" }
+      ]
+    },
+
+    "named-arg": {
+      "comment": "name: expr in an argument list. Listed before #identifier so the name gets variable.parameter.",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+      "captures": {
+        "1": { "name": "variable.parameter.flow" },
+        "2": { "name": "punctuation.separator.key-value.flow" }
+      }
+    },
+
+    "it": {
+      "name": "variable.language.it.flow",
+      "match": "\\b(it)\\b"
+    },
+
+    "row": {
+      "comment": "The per-row element binding inside a pipeline stage scope.",
+      "name": "variable.language.row.flow",
+      "match": "\\b(row)\\b"
+    },
+
+    "call": {
+      "comment": "f(arg, ...). Begin/end balances parens so a nested ) does not escape to a parent context.",
+      "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+      "beginCaptures": {
+        "1": { "name": "entity.name.function.call.flow" },
+        "2": { "name": "punctuation.section.parens.begin.flow" }
+      },
+      "end": "(\\))",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.parens.end.flow" }
+      },
+      "patterns": [
+        { "include": "#expression" }
+      ]
+    },
+
+    "construct": {
+      "comment": "Name { field: value, ... } — record constructor. Own begin/end so the inner } does not terminate the enclosing flow body.",
+      "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": { "name": "entity.name.type.construct.flow" },
+        "2": { "name": "punctuation.section.braces.begin.flow" }
+      },
+      "end": "(\\})",
+      "endCaptures": {
+        "1": { "name": "punctuation.section.braces.end.flow" }
+      },
+      "patterns": [
+        { "include": "#expression" }
+      ]
+    },
+
+    "field-access": {
+      "comment": "Dotted path segment. The path head is matched by #identifier or #it; subsequent .name segments are colored as member access.",
+      "match": "(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "punctuation.accessor.dot.flow" },
+        "2": { "name": "variable.other.member.flow" }
+      }
+    },
+
+    "identifier": {
+      "name": "variable.other.flow",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    },
+
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.separator.comma.flow",         "match": "," },
+        { "name": "punctuation.section.parens.begin.flow",    "match": "\\(" },
+        { "name": "punctuation.section.parens.end.flow",      "match": "\\)" },
+        { "name": "punctuation.section.braces.begin.flow",    "match": "\\{" },
+        { "name": "punctuation.section.braces.end.flow",      "match": "\\}" },
+        { "name": "punctuation.section.brackets.begin.flow",  "match": "\\[" },
+        { "name": "punctuation.section.brackets.end.flow",    "match": "\\]" },
+        { "name": "keyword.operator.assignment.flow",         "match": "=" }
+      ]
+    }
+  }
+}

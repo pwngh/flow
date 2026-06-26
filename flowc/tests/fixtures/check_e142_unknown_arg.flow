@@ -1,0 +1,9 @@
+type User = { id: string }
+
+tool create_user(email: string) -> User
+  effect deterministic
+
+flow demo(User) -> User {
+  u = create_user(email: it.id, bogus_field: it.id)
+  u
+}

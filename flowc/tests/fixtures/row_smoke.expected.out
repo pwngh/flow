@@ -1,0 +1,96 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/row_smoke.flow",
+  "types": [
+    {
+      "name": "Item",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "cost", "type": "int"}
+      ]
+    },
+    {
+      "name": "Doubled",
+      "kind": "record",
+      "fields": [
+        {"name": "full", "type": "Item"},
+        {"name": "doubled", "type": "int"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "fetch_items",
+      "input": [
+        {"name": "uid", "type": "string"}
+      ],
+      "output": "[Item]",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "expand",
+      "params": [
+        {"name": "uid", "type": "string", "implicit": false}
+      ],
+      "output": "[Doubled]",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_items",
+          "args": [
+            {
+              "field": "uid",
+              "value": {
+                "kind": "path",
+                "segments": ["uid"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "select",
+            "op": "select",
+            "body": {
+              "kind": "construct",
+              "type": "Doubled",
+              "fields": [
+                {
+                  "name": "full",
+                  "value": {
+                    "kind": "path",
+                    "segments": ["row"]
+                  }
+                },
+                {
+                  "name": "doubled",
+                  "value": {
+                    "kind": "binop",
+                    "op": "*",
+                    "left": {
+                      "kind": "path",
+                      "segments": ["row", "cost"]
+                    },
+                    "right": {
+                      "kind": "literal",
+                      "value": 2,
+                      "type": "int"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

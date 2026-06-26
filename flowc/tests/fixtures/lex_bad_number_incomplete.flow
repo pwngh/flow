@@ -1,0 +1,4 @@
+flow f(int) -> float {
+  x = 1.
+  x
+}

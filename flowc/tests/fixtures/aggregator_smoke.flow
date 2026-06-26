@@ -1,0 +1,28 @@
+type Item = { id: string, cost: int, flagged: bool }
+
+tool fetch_items(uid: string) -> [Item]
+  effect deterministic
+
+flow total_cost(uid: string) -> int {
+  fetch_items(uid) | sum cost
+}
+
+flow item_count(uid: string) -> int {
+  fetch_items(uid) | count
+}
+
+flow most_expensive(uid: string) -> int {
+  fetch_items(uid) | max cost
+}
+
+flow cheapest(uid: string) -> int {
+  fetch_items(uid) | min cost
+}
+
+flow has_flagged(uid: string) -> bool {
+  fetch_items(uid) | any flagged
+}
+
+flow all_flagged(uid: string) -> bool {
+  fetch_items(uid) | all flagged
+}

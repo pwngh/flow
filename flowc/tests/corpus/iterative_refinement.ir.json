@@ -1,0 +1,162 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/iterative_refinement.flow",
+  "types": [
+    {
+      "name": "RefinementRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "session_id", "type": "string"},
+        {"name": "task", "type": "string"},
+        {"name": "principles", "type": "[string]"},
+        {"name": "quality_threshold", "type": "float"},
+        {"name": "max_iterations", "type": "int"},
+        {"name": "budget_limit_cents", "type": "int"}
+      ]
+    },
+    {
+      "name": "IterationStep",
+      "kind": "record",
+      "fields": [
+        {"name": "iteration", "type": "int"},
+        {"name": "draft", "type": "string"},
+        {"name": "critique", "type": "string"},
+        {"name": "score", "type": "float"},
+        {"name": "refined", "type": "string"},
+        {"name": "cost_cents", "type": "int"}
+      ]
+    },
+    {
+      "name": "RefinementResult",
+      "kind": "record",
+      "fields": [
+        {"name": "final_draft", "type": "string"},
+        {"name": "final_score", "type": "float"},
+        {"name": "iteration_count", "type": "int"},
+        {"name": "stopped_reason", "type": "string"},
+        {"name": "total_cost_cents", "type": "int"},
+        {"name": "history", "type": "[IterationStep]"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "generate_initial",
+      "input": [
+        {"name": "task", "type": "string"}
+      ],
+      "output": "string",
+      "effect": {
+        "level": "model",
+        "model": "generate-v1"
+      }
+    },
+    {
+      "name": "iteratively_refine",
+      "input": [
+        {"name": "initial_draft", "type": "string"},
+        {"name": "task", "type": "string"},
+        {"name": "principles", "type": "[string]"},
+        {"name": "quality_threshold", "type": "float"},
+        {"name": "max_iterations", "type": "int"},
+        {"name": "budget_limit_cents", "type": "int"},
+        {"name": "session_id", "type": "string"}
+      ],
+      "output": "RefinementResult",
+      "effect": {
+        "level": "model",
+        "model": "refine-v1"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "refine",
+      "params": [
+        {"name": "it", "type": "RefinementRequest", "implicit": true}
+      ],
+      "output": "RefinementResult",
+      "bindings": [
+        {
+          "name": "draft",
+          "expr": {
+            "kind": "call",
+            "tool": "generate_initial",
+            "args": [
+              {
+                "field": "task",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "task"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "result",
+          "expr": {
+            "kind": "call",
+            "tool": "iteratively_refine",
+            "args": [
+              {
+                "field": "initial_draft",
+                "value": {
+                  "kind": "path",
+                  "segments": ["draft"]
+                }
+              },
+              {
+                "field": "task",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "task"]
+                }
+              },
+              {
+                "field": "principles",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "principles"]
+                }
+              },
+              {
+                "field": "quality_threshold",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "quality_threshold"]
+                }
+              },
+              {
+                "field": "max_iterations",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "max_iterations"]
+                }
+              },
+              {
+                "field": "budget_limit_cents",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "budget_limit_cents"]
+                }
+              },
+              {
+                "field": "session_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "session_id"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["result"]
+      }
+    }
+  ]
+}

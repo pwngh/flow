@@ -1,0 +1,226 @@
+# loan_adjudication.flow — corpus flow #5 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Zest AI underwriting methodology (ensemble decisioning,
+# auto-approve / auto-deny / refer-to-manual at ~80/20 split, ECOA &
+# FCRA adverse-action reason codes per decline). Upstart and hybrid-
+# underwriting literature on multi-tier approval workflows. LangGraph
+# multi-agent debate pattern for the disagreement-resolution variant.
+#
+# A loan adjudication with three reviewers has this shape:
+#
+#   gather       pull credit report          \
+#                verify income / employment   } parallel; all may fail
+#                run identity / fraud check  /
+#
+#   review       review_credit(app, credit)            \
+#                review_affordability(app, income)      } parallel
+#                review_identity(app, identity)        /
+#                each returns { verdict, confidence, reason_codes }
+#
+#   consensus    if all three agree (approve | deny):   take that verdict
+#                if one disagrees:                       debate round
+#                                                          each reviewer sees
+#                                                          the others' verdicts
+#                                                          and may revise
+#                                                          (loop ≤ N rounds)
+#                if still disagree:                      refer to senior
+#
+#   execute      approve  → set rate, term, generate offer
+#                deny     → emit adverse-action notice with reason codes
+#                                                          (regulatory: ECOA,
+#                                                           FCRA — 4 codes
+#                                                           required per
+#                                                           decline)
+#                refer    → queue for manual underwriter
+#                                                          with full context
+#
+# The load-bearing constructs: three reviewers running in parallel,
+# each itself a small flow (data + model → verdict); consensus logic
+# branching on the verdict tuple; a bounded iterative debate when the
+# reviewers disagree; and adverse-action reasoning that exists only on
+# deny outcomes and must be regulator-compliant.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow adjudicate(LoanApplication) -> AdjudicationDecision {
+#     # parallel gather; tolerate single failure (refer if bureau down)
+#     credit   = try pull_credit_report(it.applicant_id)
+#                catch _ -> Refer { reason: "bureau_unavailable" }
+#     income   = verify_income(it.applicant_id, it.stated_income)
+#     identity = run_identity_check(it.applicant_id)
+#
+#     # each reviewer is its own flow:
+#     v_credit   = review_credit_flow(it, credit)        # sub-flow
+#     v_income   = review_affordability_flow(it, income) # sub-flow
+#     v_identity = review_identity_flow(it, identity)    # sub-flow
+#
+#     # consensus dispatch:
+#     verdicts = [v_credit, v_income, v_identity]
+#
+#     final =
+#       if all_agree(verdicts):
+#         verdicts[0]                              # unanimous
+#       else:
+#         # bounded debate; each round reviewers may revise
+#         debated = fold(range(1, 3), verdicts, round, vs ->
+#           map(vs, v -> revise(v, vs))            # nested map
+#         )
+#         if all_agree(debated): debated[0]
+#         else: refer_to_senior(it, debated)
+#
+#     if final.verdict == "approve":
+#       generate_offer(it, final)
+#     else if final.verdict == "deny":
+#       emit_adverse_action_notice(it.applicant_id, final.reason_codes)
+#     else:  # refer
+#       queue_for_manual_underwriter(it, verdicts, debated)
+#
+#     AdjudicationDecision { outcome: final.verdict, ... }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — the consensus dispatch
+#                 (unanimous-approve / unanimous-deny / disagree-debate
+#                 / disagree-refer) is 4-way. The execute step is
+#                 3-way (offer / adverse-action / queue). The language
+#                 has no n-way branch.
+#
+#   blocked: #2   parallel fan-out + join — three data pulls and three
+#                 reviewers, all independent in production. Six
+#                 parallel calls collapse into six sequential ones in
+#                 source.
+#
+#   blocked: #3   in-source error handling — credit bureau pulls fail
+#                 (timeouts, rate-limits, applicant unknown). Real
+#                 systems treat this as "refer to manual" rather than
+#                 abort the application. R101 aborts.
+#
+#   blocked: #4   loops / fold over a list — debate rounds are a
+#                 *while loop with bounded count*: iterate while
+#                 verdicts disagree, up to N rounds, then exit. This
+#                 is broader than the map case (cf. flow #4) — it is
+#                 a stateful loop with a termination predicate. Same
+#                 shape as flow #18 iterative_refinement. If the
+#                 corpus shows iterative-with-termination across
+#                 #5, #18, #19, treat it as a distinct rubric slot
+#                 from map/fold.
+#
+#   blocked: #7   sub-flow composition — each reviewer (credit /
+#                 affordability / identity) is a small flow on its
+#                 own: pull data, score, attach reason codes. They
+#                 want to be reusable across loan types, credit lines,
+#                 and prequalification. Today they must be inlined as
+#                 tools, which means duplicated logic on every
+#                 callsite that wants reviewer reuse.
+#
+#   blocked: #10  optional types — adverse_action_reasons is populated
+#                 only on deny. approved_amount / rate_bps populated
+#                 only on approve. Refer outcomes have neither.
+#                 Today every field must be always-present (zero, "",
+#                 or empty list as a sentinel) — fragile in a
+#                 regulated domain.
+#
+#   blocked: #13  Other: no string literals — verdicts are "approve" /
+#                 "deny" / "refer"; reason codes are an ECOA-defined
+#                 enum ("R01_INSUFFICIENT_CREDIT_HISTORY", etc.).
+#                 Source cannot compare against any of these.
+#                 Verdict tuple equality (`all_agree`) is unwritable
+#                 even with branching.
+#
+#   blocked: #13  Other: list-literal construction. The intended flow
+#                 needs `verdicts = [v_credit, v_income, v_identity]`
+#                 — a 3-element list built from local bindings. The
+#                 language has no list-literal syntax; the only way
+#                 to obtain a list is from a tool return. Surfaced
+#                 once already in flow #4 (aggregation primitives);
+#                 cleanly separable here as "list constructors,"
+#                 distinct from concat/fold.
+#
+#   shippable: N — what compiles below executes all six steps
+#                  sequentially and hands the three verdicts to a
+#                  single judge tool. The judge tool internally
+#                  encodes consensus, debate, regulatory compliance,
+#                  and adverse-action generation. That tool will be
+#                  written by someone who is not the workflow author,
+#                  audited by someone who is not the workflow author,
+#                  and re-audited annually under ECOA examination
+#                  rules. The whole point of declarative loan flow
+#                  is that the auditor can read the logic.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: serial gather, serial review, single judge.
+
+type LoanApplication      = { applicant_id: string,
+                            requested_amount: int,
+                            term_months: int,
+                            stated_income: int }
+
+type CreditReport         = { fico: int,
+                            dti: float,
+                            open_accounts: int,
+                            delinquencies: int }
+
+type IncomeData           = { verified_amount: int,
+                            employment_status: string,
+                            stable_months: int }
+
+type IdentityData         = { match_score: float,
+                            fraud_flags: int }
+
+type ReviewerVerdict      = { verdict: string,
+                            confidence: float,
+                            reason_codes: [string] }
+
+type AdjudicationDecision = { outcome: string,
+                            approved_amount: int,
+                            rate_bps: int,
+                            adverse_reasons: [string] }
+
+tool pull_credit_report     (applicant_id: string)                 -> CreditReport
+  effect deterministic
+tool verify_income          (applicant_id: string,
+                             stated_income: int)                   -> IncomeData
+  effect deterministic
+tool run_identity_check     (applicant_id: string)                 -> IdentityData
+  effect deterministic
+
+tool review_credit          (app: LoanApplication,
+                             credit: CreditReport)                 -> ReviewerVerdict
+  effect model("review-credit-v1")
+tool review_affordability   (app: LoanApplication,
+                             income: IncomeData)                   -> ReviewerVerdict
+  effect model("review-affordability-v1")
+tool review_identity        (app: LoanApplication,
+                             identity: IdentityData)               -> ReviewerVerdict
+  effect model("review-identity-v1")
+
+tool judge_consensus        (credit:   ReviewerVerdict,
+                             income:   ReviewerVerdict,
+                             identity: ReviewerVerdict)            -> AdjudicationDecision
+  effect model("adjudicate-v1")
+
+flow adjudicate(LoanApplication) -> AdjudicationDecision {
+  # awkward: three independent data pulls serialised; counts toward #2.
+  credit_data   = pull_credit_report(it.applicant_id)
+  income_data   = verify_income(it.applicant_id, it.stated_income)
+  identity_data = run_identity_check(it.applicant_id)
+
+  # awkward: three independent reviews serialised; would be parallel
+  # in production, and each reviewer is its own flow (cf. #7).
+  credit_verdict   = review_credit(it, credit_data)
+  income_verdict   = review_affordability(it, income_data)
+  identity_verdict = review_identity(it, identity_data)
+
+  # workaround: the entire consensus + debate + adverse-action logic
+  # collapses into one tool. The auditor reading this code sees
+  # "we asked three things and then asked the judge." The actual
+  # adjudication policy — including the debate loop, the regulatory
+  # reason-code mapping, and the refer-to-senior path — is invisible.
+  decision = judge_consensus(credit_verdict, income_verdict, identity_verdict)
+
+  decision
+}

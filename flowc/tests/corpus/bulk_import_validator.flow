@@ -1,0 +1,240 @@
+# bulk_import_validator.flow — corpus flow #8 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Airtable CSV Import Extension (field mapping, type
+# coercion, "skip blank or invalid CSV values" toggle, per-row
+# rejection without aborting the import). Linear's in-product importer
+# (validation upfront, ambiguity prompts, preview before finalise,
+# bulk-delete-import as the undo path).
+#
+# A bulk-import validator has this shape:
+#
+#   parse        read file (CSV / Excel)
+#                detect encoding, delimiter, quote style
+#                emit [ParsedRow]
+#
+#   map fields   apply user-defined column → field mapping
+#                resolve foreign-key references (lookup-by-name)
+#
+#   validate     per row (map): required fields present; type-coerce
+#                  (dates, ints, enums); enum-membership for select
+#                  fields; uniqueness check; custom rules
+#                per row produces { coerced_values, errors: [Error] }
+#
+#   aggregate    fold rows into ValidationReport:
+#                  valid_rows, invalid_rows, errors_by_row,
+#                  errors_by_column, total_count
+#
+#   decide       strict mode + any invalid     → preview only, no import
+#                skip-invalid + some invalid   → proceed with valid rows
+#                user-confirm mode             → return preview, PAUSE
+#                                                resume on user-confirm
+#                                                event (a separate flow
+#                                                trigger)
+#
+#   execute      batched insert in chunks of ~500 (DB perf);
+#                handle DB-level failures *after* validation
+#                  (uniqueness collisions, FK violations not catchable
+#                   pre-DB)
+#
+#   summary      { total, imported, failed, errors_by_row,
+#                  errors_by_column }
+#
+# Three load-bearing facts:
+#
+#   (a) Per-row validation is a *map with error accumulation*. Each
+#       row's failure is independent; the entire batch should not
+#       abort because row 42 has a malformed date. This is a distinct
+#       idiom from try/catch — the language needs "run this and
+#       collect what failed," not "run this and recover from
+#       failure."
+#
+#   (b) The preview-then-confirm flow is a *suspended* flow: validate
+#       returns a preview; user inspects; user clicks Confirm; the
+#       flow resumes with the previewed plan and inserts. This is a
+#       pause-and-resume / wait-for-event shape that the language has
+#       no notion of.
+#
+#   (c) Batched insert is itself a fold over chunks: split [Row] into
+#       chunks of N, insert each, accumulate per-chunk results. Same
+#       map-and-collect shape as validation, applied to writes.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow import(ImportRequest) -> ImportSummary {
+#     rows = parse_source(it.source_id)             # [ParsedRow]
+#
+#     # per-row validation with error accumulation:
+#     per_row = map(rows, r -> validate_row(r, it.schema, it.mapping))
+#                                                  # [RowValidation]
+#
+#     report = fold(per_row, EmptyReport, acc, v ->
+#       if v.errors == []:
+#         acc with { valid_rows: append(acc.valid_rows, v.coerced) }
+#       else:
+#         acc with { invalid_rows: append(acc.invalid_rows, v) }
+#     )
+#
+#     # strict / skip-invalid dispatch:
+#     if it.mode == "strict" and report.invalid_count > 0:
+#       return ImportSummary { total: report.total, imported: 0,
+#                              failed: report.invalid_count,
+#                              errors: report.errors }
+#
+#     # user-confirm pause:
+#     if it.mode == "preview":
+#       preview_id = save_preview(report)
+#       SUSPEND_UNTIL user_confirms(preview_id)
+#       # ... resumes here with the same `report` ...
+#
+#     # batched insert as fold over chunks:
+#     chunks = chunk(report.valid_rows, 500)        # [[Row]]
+#     insert_results = map(chunks, ch -> insert_batch(ch, it.target_table))
+#     totals = fold(insert_results, 0, acc, r -> acc + r.inserted)
+#
+#     ImportSummary { total: report.total,
+#                     imported: totals,
+#                     failed: report.invalid_count + sum_db_failures(insert_results),
+#                     errors: report.errors }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #4   loops / fold — the central gap. Three uses of the
+#                 missing construct: per-row validate (map), per-row
+#                 fold into report (reduce), chunk-then-insert (map +
+#                 reduce again). Plus the implicit "for each error,
+#                 attach to its column" rollup. Without `map`, the
+#                 entire workflow collapses to "ask one tool to do
+#                 all of this." Recurs from flow #4 research; this is
+#                 the second flow where #4 is the dominant gap.
+#
+#   blocked: #3   in-source error handling — the *accumulation* form,
+#                 not the *recovery* form. Per-row validation must
+#                 emit errors without aborting; DB-level uniqueness
+#                 violations during insert must surface to a summary
+#                 rather than killing the batch. Worth noting that #3
+#                 has TWO distinct sub-cases in the corpus:
+#                   (a) "try X; if it fails, do Y instead" — flows
+#                       #1, #2, #6, #7
+#                   (b) "run X on many things, collect what failed,
+#                       return the collection" — flow #8
+#                 These are different language constructs. If the
+#                 design pass treats them as one, it will solve only
+#                 the recovery case and leave accumulation broken.
+#
+#   blocked: #1   multi-branch routing — strict-vs-skip-invalid-vs-
+#                 preview mode dispatch; per-error-category routing
+#                 to user-facing messages.
+#
+#   blocked: #5   conditional binding — insert step runs only if mode
+#                 allows; preview-save runs only in preview mode;
+#                 user-confirm wait runs only in preview mode.
+#
+#   blocked: #10  optional types — most CSV columns are nullable in
+#                 the database schema. ParsedRow.values are
+#                 string-or-empty. ValidationError.column is absent
+#                 for row-level errors (unparsable row entirely).
+#                 ImportSummary.errors empty on success.
+#
+#   blocked: #12  time / scheduling — preview-then-confirm is a
+#                 PAUSE-AND-RESUME shape. The flow runs, returns a
+#                 preview, the user inspects on a UI, clicks Confirm
+#                 *minutes or hours later*, and the flow resumes from
+#                 where it left off. This is the third occurrence of
+#                 #12 in the corpus (flow #4 wall-clock budget, flow
+#                 #6 100ms SLA, now flow #8 pause-until-event). Each
+#                 occurrence is a DIFFERENT sub-shape of "the
+#                 language has no time/event semantics." Worth
+#                 splitting #12 into 12a (deadlines), 12b (pause-
+#                 until-event), 12c (scheduled-future-trigger from
+#                 flow #1).
+#
+#   blocked: #13  Other: aggregation primitives over lists (concat,
+#                 append, group_by, sum). Surfaces here too:
+#                 errors_by_row, errors_by_column, sum of inserted.
+#                 Second occurrence (flow #4 research first; now
+#                 flow #8). Candidate for promotion if it shows up in
+#                 #14 KYC or #16 RAG.
+#
+#   blocked: #14  (PROVISIONAL — promoted at flow #7) lazy / short-
+#                 circuit evaluation. Does NOT surface in this flow.
+#                 Bulk-import is not cost-driven cascade; every row
+#                 must be validated. Noted for completeness.
+#
+#   shippable: N — what compiles below collapses three iteration
+#                  passes (validate, fold, insert-chunks) into one
+#                  validate_rows tool plus one insert_rows tool. The
+#                  per-row error accumulation, the chunking, the
+#                  pause-for-preview, the strict/skip dispatch — all
+#                  hidden. A user would correctly conclude that this
+#                  Flow source does not describe the importer they
+#                  are running; it describes "ask the importer."
+#
+# ----------------------------------------------------------------------
+# Compilable stub: parse, validate (with all errors rolled up inside
+# the tool), insert (with DB failures rolled up inside the tool),
+# construct summary.
+
+type ImportRequest    = { source_id:    string,
+                        target_table: string,
+                        mode:         string }
+
+type ParsedRow        = { row_index: int,
+                        values:    [string] }
+
+type ValidationError  = { row_index: int,
+                        column:    string,
+                        code:      string,
+                        message:   string }
+
+type ValidationReport = { valid_rows:    [ParsedRow],
+                        errors:        [ValidationError],
+                        total:         int,
+                        valid_count:   int,
+                        invalid_count: int }
+
+type InsertResult     = { inserted:  int,
+                        db_errors: [ValidationError] }
+
+type ImportSummary    = { total:    int,
+                        imported: int,
+                        failed:   int,
+                        errors:   [ValidationError] }
+
+tool parse_source     (source_id:    string)              -> [ParsedRow]
+  effect deterministic
+tool validate_rows    (rows:         [ParsedRow],
+                       target_table: string,
+                       mode:         string)              -> ValidationReport
+  effect deterministic
+tool insert_rows      (rows:         [ParsedRow],
+                       target_table: string)              -> InsertResult
+  effect mutation
+
+flow import(ImportRequest) -> ImportSummary {
+  # awkward: emits a list that source cannot iterate. Same gap as
+  # flow #4 research — once you have a list, the language can pass
+  # it onward but not visit it.
+  rows = parse_source(it.source_id)
+
+  # workaround: per-row map + fold + strict/skip dispatch + preview-
+  # pause all collapse into one tool. The mode flag is plumbed in
+  # but the source cannot branch on it; the tool internally chooses
+  # whether to return an empty valid_rows for strict-mode-with-errors.
+  report = validate_rows(rows, it.target_table, it.mode)
+
+  # workaround: chunk-then-insert + per-chunk error accumulation
+  # collapse into one tool. The 500-row chunk size, the per-DB-batch
+  # error handling, are invisible.
+  inserts = insert_rows(report.valid_rows, it.target_table)
+
+  ImportSummary {
+    total:    report.total,
+    imported: inserts.inserted,
+    failed:   report.invalid_count,
+    errors:   report.errors
+  }
+}

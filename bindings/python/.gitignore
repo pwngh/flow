@@ -1,0 +1,19 @@
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# Bytecode
+__pycache__/
+*.py[cod]
+
+# Test caches
+.pytest_cache/
+
+# Example run output
+examples/traces/
+
+# cffi-generated native extension (built from flowd/_cffi_build.py)
+flowd/_flowd.c
+flowd/_flowd*.o
+flowd/_flowd*.so

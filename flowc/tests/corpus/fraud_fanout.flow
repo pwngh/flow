@@ -1,0 +1,226 @@
+# fraud_fanout.flow — corpus flow #6 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Stripe Radar docs (rules engine, 0–100 risk score,
+# 3DS / block / review / allow outcomes, rule ordering "3DS first then
+# block/review"). Sift Score documentation (ensemble combination of
+# device fingerprint, velocity, geo, behavioural signals; ~100ms
+# real-time budget at decision time).
+#
+# A purchase-fraud fan-out has this shape:
+#
+#   short-circuit  allowlist match  → outcome = "allow"  (skip everything)
+#                  blocklist match  → outcome = "block"  (skip everything)
+#
+#   signals        device fingerprint  \
+#                  velocity check       } 4 calls; parallel; ≤ 100ms total
+#                  geolocation check   /
+#                  list lookup (already done above for short-circuit)
+#
+#   combine        ensemble-weighted sum → score in [0, 100]
+#
+#   dispatch       score <  20            → allow
+#                  20 ≤ score < 50        → 3DS challenge
+#                  50 ≤ score < 75        → manual review
+#                  score ≥ 75             → block
+#                  (also: list_hit.on_allowlist overrides to allow at any score;
+#                         list_hit.on_blocklist overrides to block at any score)
+#
+#   side-effects   emit Radar event; update velocity counters; if review,
+#                  enqueue for manual queue with full signal payload
+#
+# Two load-bearing facts:
+#
+#   (a) The short-circuit on list-match is what keeps the average cost
+#       per decision low. Most legitimate traffic from a known good
+#       customer hits the allowlist and skips every model invocation.
+#       If the language forces every signal to run before the decision,
+#       cost rises ~10x at scale.
+#
+#   (b) The 100ms budget is a hard wall imposed by upstream processors.
+#       Sequential execution of 4 signals at ~30ms each is already
+#       over. Fan-out is required, not optional.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow score_fraud(PaymentAttempt) -> FraudDecision {
+#     # cheap short-circuit:
+#     lists = check_allow_block_lists(it.customer_id, it.email)
+#     if lists.on_allowlist:
+#       return FraudDecision { outcome: "allow", score: 0, ... }
+#     if lists.on_blocklist:
+#       return FraudDecision { outcome: "block", score: 100, ... }
+#
+#     # parallel; tolerate single failure:
+#     device   = try check_device(it.device_fingerprint)   catch _ -> Unknown
+#     velocity = try check_velocity(it.customer_id, ...)   catch _ -> Unknown
+#     geo      = try check_geo(it.ip, it.billing_country)  catch _ -> Unknown
+#
+#     deadline 100ms { ... }     # signals must all return by 100ms
+#
+#     score = combine_signals(device, velocity, geo, lists)
+#
+#     outcome =
+#       if score < 20:  "allow"
+#       else if score < 50: "3ds_challenge"
+#       else if score < 75: "review"
+#       else: "block"
+#
+#     if outcome == "review":
+#       enqueue_for_manual_review(it, device, velocity, geo, lists, score)
+#
+#     emit_radar_event(it.payment_id, outcome, score)
+#
+#     FraudDecision {
+#       outcome, score,
+#       requires_3ds: outcome == "3ds_challenge",
+#       requires_manual_review: outcome == "review"
+#     }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — the score-band dispatch is
+#                 4-way (allow / 3ds / review / block). Plus the
+#                 allowlist and blocklist early-returns. Plus the
+#                 review-only side-effect branch. The whole "decide"
+#                 stage IS branching.
+#
+#   blocked: #2   parallel fan-out + join — the marquee case for this
+#                 construct. Four signal calls run concurrently in
+#                 production; their results are joined into the
+#                 scoring step. Source serialises them, which alone
+#                 breaks the 100ms budget on most traffic. This is the
+#                 flow the construct is named after.
+#
+#   blocked: #3   in-source error handling — geo lookup times out at
+#                 the long tail (slow IP-to-country DBs, network
+#                 blips). Production behaviour: proceed with the
+#                 signals that returned, mark lower confidence, do
+#                 NOT abort the payment. R101 would block legitimate
+#                 transactions on a vendor glitch.
+#
+#   blocked: #5   conditional binding — list-lookup short-circuit;
+#                 enqueue-for-review side-effect only on the "review"
+#                 outcome. Both are conditional execution that the
+#                 language does not have.
+#
+#   blocked: #10  optional types — device_fingerprint is absent on
+#                 headless requests, server-side card-on-file
+#                 transactions, and some mobile in-app SDKs. Today
+#                 the field has to be always-present-and-empty.
+#
+#   blocked: #12  time / scheduling — the 100ms deadline is the
+#                 reason fan-out exists. The language has no way to
+#                 express "all of these must return by T, then
+#                 combine what came back." Recurs from flow #4
+#                 (research wall-clock budget) but here it is a hard
+#                 SLA, not a soft cap.
+#
+#   blocked: #13  Other: lazy / short-circuit evaluation. Recurring
+#                 from flow #3 (moderation cascade). The allowlist
+#                 short-circuit IS the cost-saver: on the ~80% of
+#                 legitimate repeat-customer traffic that hits the
+#                 allowlist, *none* of the three model signals should
+#                 fire. With eager evaluation, all three fire on every
+#                 transaction and the unit economics collapse.
+#                 SECOND occurrence — promote to a named slot before
+#                 Friday.
+#
+#   blocked: #13  Other: no string literals — outcome enum ("allow",
+#                 "block", "3ds_challenge", "review") and currency /
+#                 country codes (ISO-4217, ISO-3166) cannot be
+#                 compared in source. Recurring; do not promote
+#                 further, this is already in the "well-known" pile.
+#
+#   shippable: N — the workflow that compiles below runs every signal
+#                  on every payment and serialises them. At Stripe-
+#                  scale unit cost, both the latency budget and the
+#                  per-decision cost are violated; the production
+#                  system will reject this flow as un-deployable. The
+#                  source describes a 4-stage decision; what's missing
+#                  is the structure that makes the decision viable.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: list lookup runs first (no early exit possible),
+# then three signals serially, then one combine, then one dispatch.
+
+type PaymentAttempt   = { payment_id: string,
+                        customer_id: string,
+                        amount: int,
+                        currency: string,
+                        device_fingerprint: string,
+                        ip: string,
+                        email: string,
+                        billing_country: string }
+
+type DeviceSignal     = { fingerprint_known: bool,
+                        risk_score: float,
+                        suspicious_traits: int }
+
+type VelocitySignal   = { txns_last_hour: int,
+                        distinct_cards_last_day: int,
+                        risk_score: float }
+
+type GeoSignal        = { ip_country: string,
+                        mismatch: bool,
+                        vpn_detected: bool,
+                        risk_score: float }
+
+type ListSignal       = { on_allowlist: bool,
+                        on_blocklist: bool,
+                        list_name: string }
+
+type FraudDecision    = { outcome: string,
+                        score: int,
+                        requires_3ds: bool,
+                        requires_manual_review: bool }
+
+tool check_allow_block_lists  (customer_id: string,
+                               email: string)              -> ListSignal
+  effect deterministic
+tool check_device             (fingerprint: string)        -> DeviceSignal
+  effect deterministic
+tool check_velocity           (customer_id: string,
+                               amount: int)                -> VelocitySignal
+  effect deterministic
+tool check_geo                (ip: string,
+                               billing_country: string)    -> GeoSignal
+  effect deterministic
+tool combine_signals          (device:   DeviceSignal,
+                               velocity: VelocitySignal,
+                               geo:      GeoSignal,
+                               lists:    ListSignal)       -> int
+  effect model("ensemble-score-v1")
+tool dispatch_decision        (req:      PaymentAttempt,
+                               score:    int,
+                               lists:    ListSignal)       -> FraudDecision
+  effect mutation
+
+flow score_fraud(PaymentAttempt) -> FraudDecision {
+  # awkward: this should be cheap-first with early-exit on hit. Today
+  # it runs and the result is plumbed into the join, but the three
+  # expensive signals below run anyway (#13 lazy eval).
+  lists    = check_allow_block_lists(it.customer_id, it.email)
+
+  # awkward: the three signals are independent and the production
+  # system fans them out. Source serialises them; #2 fan-out + #12
+  # latency budget collapse together on this line.
+  device   = check_device(it.device_fingerprint)
+  velocity = check_velocity(it.customer_id, it.amount)
+  geo      = check_geo(it.ip, it.billing_country)
+
+  # workaround: scoring exposes its output (int 0–100) but the
+  # ensemble-combination logic is opaque. Acceptable — that part is
+  # a model, not a workflow concern.
+  score    = combine_signals(device, velocity, geo, lists)
+
+  # workaround: the 4-way score-band dispatch AND the allowlist /
+  # blocklist override AND the review-side-effect collapse into one
+  # tool. The source no longer shows the decision policy.
+  decision = dispatch_decision(it, score, lists)
+
+  decision
+}

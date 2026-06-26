@@ -1,0 +1,12 @@
+Resolved tests/fixtures/resolve_smoke.flow
+  Globals
+    Type @1:1 User
+    Type @2:1 Plan
+    Tool @4:1 create_user
+    Tool @6:1 best_plan
+    Flow @9:1 signup
+  Flow @9:1 signup
+    Locals
+      Param @9:13 it
+      Binding @10:3 user
+      Binding @11:3 plan

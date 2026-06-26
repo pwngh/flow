@@ -1,0 +1,16 @@
+type User = { id: string, email: string }
+type Plan = { id: string, cost: int }
+
+tool create_user(email: string) -> User
+  effect deterministic
+tool best_plan(user: User) -> [Plan]
+  effect deterministic
+
+flow signup(User) -> Plan {
+  user = create_user(it.email)
+  plan = best_plan(user)
+       | where cost <= 100
+       | rank cost asc
+       | pick using primary
+  plan
+}

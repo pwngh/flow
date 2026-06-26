@@ -1,0 +1,7 @@
+tool fetch_count(id: string) -> int
+  effect deterministic
+
+flow safe_count(id: string) -> int {
+  c = try fetch_count(id) else 0
+  c
+}

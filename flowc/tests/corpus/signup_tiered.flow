@@ -1,0 +1,126 @@
+# signup_tiered.flow — corpus flow #1 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Stripe billing docs (build-subscriptions, trials) and
+# Linear's free/paid tier behaviour, observable on a fresh signup.
+#
+# At signup time a tiered product branches three ways on `tier`:
+#
+#   free            create_customer
+#                 → create_free_subscription           (status: active immediately)
+#                 → no payment collection
+#                 → send_welcome_email
+#
+#   paid            create_customer
+#                 → attach_payment_method              (may fail; payment_intent.succeeded webhook)
+#                 → create_paid_subscription           (status: active on payment success)
+#                 → send_welcome_email
+#
+#   paid_with_trial create_customer
+#                 → attach_payment_method              (collected upfront even for trials)
+#                 → create_trial_subscription          (status: trialing)
+#                 → schedule_trial_will_end_reminder   (3 days before trial ends)
+#                 → send_welcome_email
+#
+# The three branches share the first step and the last step. They differ
+# on what happens in between, including whether payment collection
+# happens at all. This is the load-bearing fact about signup_tiered:
+# the dispatch is not cosmetic, it changes which tools run.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today; reproduced as a comment):
+#
+#   flow signup(SignupRequest) -> SignupResult {
+#     customer = create_customer(it.email)
+#
+#     sub =
+#       if it.tier == "free":
+#         create_free_subscription(customer)
+#       else if it.tier == "paid":
+#         _ = attach_payment_method(customer, it.payment_token)
+#         create_paid_subscription(customer)
+#       else:   # paid_with_trial
+#         _ = attach_payment_method(customer, it.payment_token)
+#         trial = create_trial_subscription(customer, it.trial_days)
+#         schedule_trial_will_end_reminder(trial)
+#         trial
+#
+#     send_welcome_email(customer, it.tier)
+#     SignupResult { customer, sub }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — no n-way dispatch on a value.
+#                 The `if / else if / else` block above is unwritable;
+#                 `pick using <model>` is a pipeline terminal over a
+#                 list, not a dispatch on a known scalar.
+#
+#   blocked: #3   in-source error handling — `attach_payment_method`
+#                 fails legitimately in production (declined card,
+#                 expired card, fraud block). The language has no form
+#                 for "if this tool fails, return SignupError instead".
+#                 The runtime emits R101 and aborts the flow; the
+#                 source cannot intercept.
+#
+#   blocked: #13  Other — no string literals. `it.tier == "free"` is
+#                 unwritable because the language admits no way to
+#                 write the literal "free". Workarounds: an int enum
+#                 (free=0, paid=1, trial=2), or a wrapper tool
+#                 `tier_is(name: string, code: int) -> bool`. Both lose
+#                 the property that the source reads like the domain.
+#
+#   blocked: #10  optional types — `payment_token` and `trial_days` are
+#                 absent on a free signup. Today the input type has to
+#                 carry them present-and-empty; a real tier-aware input
+#                 type would be a sum / variant per tier.
+#
+#   blocked: #12  time / scheduling — `schedule_trial_will_end_reminder`
+#                 must, at the runtime level, register a future event
+#                 ~3 days out. The language can express it only as an
+#                 opaque side-effecting tool; the "fire on a schedule"
+#                 semantics live entirely outside the type system, so
+#                 the source cannot say what the schedule is.
+#
+#   shippable: N — the workflow we actually want is unwritable. What
+#                  compiles below is the paid-tier path with no payment
+#                  failure handling. On its own it is a coherent flow,
+#                  but it is not signup_tiered; it is signup_paid_happy.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: paid-tier happy path only.
+
+type SignupRequest = {
+  email:         string,
+  payment_token: string
+}
+
+type Customer     = { id: string, email: string }
+type Subscription = { id: string, status: string }
+type SignupResult = { customer: Customer, sub: Subscription }
+
+tool create_customer            (email:    string)                    -> Customer
+  effect mutation
+tool attach_payment_method      (customer: Customer, token: string)   -> bool
+  effect mutation
+tool create_paid_subscription   (customer: Customer)                  -> Subscription
+  effect mutation
+tool send_welcome_email         (customer: Customer)                  -> bool
+  effect mutation
+
+flow signup(SignupRequest) -> SignupResult {
+  customer = create_customer(it.email)
+
+  # awkward: bool return discarded — no way to branch on failure
+  # (counts toward #3 in-source error handling).
+  paid_ok  = attach_payment_method(customer, it.payment_token)
+
+  sub      = create_paid_subscription(customer)
+
+  # awkward: side-effecting tool whose bool return is meaningless
+  # to the caller but the type system insists we bind something.
+  emailed  = send_welcome_email(customer)
+
+  SignupResult { customer, sub }
+}

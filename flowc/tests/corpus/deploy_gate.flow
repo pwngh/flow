@@ -1,0 +1,304 @@
+# deploy_gate.flow — corpus flow #12 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Vercel Deployment Checks (native lint/typecheck in
+# parallel with build; "Required" toggle per check; GitHub branch-
+# protection integration; manual production-promote gate). Render
+# Health Checks (post-deploy health probes in a 15-minute window;
+# auto-cancel deploy if checks fail). GitHub Actions patterns for the
+# `ci-success` aggregate-gate job (uses `needs:` context across
+# upstream jobs; `if: always()` so the gate reports even on dependency
+# failure).
+#
+# A deploy-gate workflow has this shape:
+#
+#   trigger        PR opened / push / manual deploy hook
+#                  payload: { commit_sha, branch, environment }
+#
+#   list changes   compute changed-file set since base
+#                  (drives conditional gates: e.g., E2E only if
+#                   frontend changed; security only on dependency
+#                   bumps)
+#
+#   gates (PARALLEL — slowest dictates wall-clock):
+#                  lint / typecheck            ~30 s   (always required)
+#                  unit tests                  ~2 min  (always required)
+#                  integration tests           ~10 min (required for app code)
+#                  security scan (SCA + SAST)  ~3 min  (required on deps)
+#                  build verification          ~5 min  (always required)
+#                  bundle-size / perf budget   ~1 min  (informational)
+#                  visual regression           ~4 min  (frontend only)
+#
+#   aggregate      fold all gate results into one decision:
+#                    all required passed     → allow deploy
+#                    any required failed     → block, surface which
+#                    any required errored    → mark inconclusive
+#                                              (retry, not fail)
+#                    optional gate failed    → annotate, do not block
+#
+#   approval gate  production: require human approval (1+ reviewers)
+#                  the flow pauses HERE until a human clicks Approve
+#                  preview: no approval needed
+#
+#   deploy         issue the deploy
+#                  Render: send to staging; do NOT route traffic yet
+#
+#   post-deploy    health checks within 15-min window
+#                    all instances healthy → cut over traffic
+#                    any unhealthy at T=15min → auto-rollback
+#                  smoke tests against deployed env (T+2min)
+#                  on smoke failure → auto-rollback
+#
+# Three load-bearing facts:
+#
+#   (a) Parallelism is the whole point. Sequential gates would take
+#       25+ minutes wall-clock; parallel they take ~10 (slowest gate).
+#       Vercel calls this out by name: "lint and typecheck in
+#       parallel with the build." This is the marquee #2 case AFTER
+#       fraud_fanout #6 — same gap, different domain.
+#
+#   (b) Required-vs-optional is a *configuration of the gate
+#       aggregation*, not a property of each gate. The same lint job
+#       is required on `main` and informational on a long-lived dev
+#       branch. The workflow source must express which set of gates
+#       is required for which environment / branch.
+#
+#   (c) Short-circuit semantics here are CORRECTNESS-driven, not
+#       cost-driven. Lint failing in 30s means the 10-minute
+#       integration test should be cancelled (won't change the
+#       answer). Same primitive as flow #3 / #6 / #7 (#14 lazy/
+#       short-circuit), but the motivation is "fail fast" not "save
+#       cost." Worth noting in the rubric — the primitive is the
+#       same, the cases for it are diverse.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow gate_deploy(DeployRequest) -> DeployDecision {
+#     changes = get_changed_files(it.commit_sha)
+#
+#     # which gates are required depends on environment + changed paths:
+#     required_gates =
+#       if it.environment == "production":
+#         ["lint", "unit", "integration", "security", "build"]
+#       else:  # preview
+#         ["lint", "unit", "build"]
+#
+#     # parallel fan-out over the gate list (variable arity):
+#     results = map(required_gates, g -> run_gate(g, it.commit_sha))
+#
+#     # short-circuit: if any required gate failed early, cancel the
+#     # slow ones still running (correctness short-circuit):
+#     # — language has no primitive for "cancel sibling"
+#
+#     # aggregate variant-typed results:
+#     failed_required = filter(results, r -> match r.status {
+#       Failed{..}   -> r.gate.required
+#       InfraError{} -> false      # inconclusive, not fail
+#       _            -> false
+#     })
+#
+#     if size(failed_required) > 0:
+#       return DeployDecision { allowed: false,
+#                               blocking_gates: map(failed_required, r -> r.gate),
+#                               reason: "required gates failed" }
+#
+#     # approval gate (production only) — PAUSE until human approves:
+#     if it.environment == "production":
+#       approval = await_human_approval(it.commit_sha, reviewers: 1,
+#                                       timeout: 24.hours)
+#       if approval.status == "rejected" or approval.status == "timeout":
+#         return DeployDecision { allowed: false, reason: approval.status }
+#
+#     deploy = issue_deploy(it.commit_sha, it.environment)
+#
+#     # post-deploy health check — 15-minute window with periodic probing:
+#     health = await_health_check(deploy.id,
+#                                 window: 15.minutes,
+#                                 interval: 30.seconds)
+#     if health.status != "healthy":
+#       rollback(deploy.id)
+#       return DeployDecision { allowed: false, reason: "health_failed" }
+#
+#     # smoke tests at T+2min against deployed env:
+#     smoke = run_smoke_tests(deploy.url, delay: 2.minutes)
+#     if smoke.passed == false:
+#       rollback(deploy.id)
+#       return DeployDecision { allowed: false, reason: "smoke_failed" }
+#
+#     DeployDecision { allowed: true, deploy_id: deploy.id }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — gate-result dispatch (pass /
+#                 fail-required / fail-optional / infra-error /
+#                 skipped); aggregate dispatch (allow / block /
+#                 inconclusive / await-approval); approval dispatch
+#                 (approved / rejected / timeout); post-deploy
+#                 dispatch (healthy / unhealthy / smoke-failed /
+#                 rolled-back). At least 4 separate branching steps.
+#
+#   blocked: #2   parallel fan-out + join — predicted. The marquee
+#                 case for this construct alongside flow #6 fraud.
+#                 Sequential collapses the wall-clock budget.
+#
+#   blocked: #3   in-source error handling — predicted. Both forms:
+#                 (a) recovery: CI infra glitch → mark inconclusive,
+#                     retry, do not fail the deploy
+#                 (b) accumulation: collect all gate failures into
+#                     the blocking_gates list for the comment back
+#                     to the PR
+#                 Confirms the corpus-wide split.
+#
+#   blocked: #4   loops / fold over list — predicted. The aggregate
+#                 step ("all required pass") is a fold over a
+#                 variable-length gate list. The required_gates list
+#                 itself is computed (depends on environment +
+#                 changed paths). Conditional gates (E2E only if
+#                 frontend changed) is a filter over changed files.
+#                 At least three distinct uses.
+#
+#   blocked: #5   conditional binding — required_gates depends on
+#                 environment; approval step runs only on production;
+#                 smoke tests run only after successful health check;
+#                 rollback runs only on post-deploy failure.
+#
+#   blocked: #7   sub-flow composition — each gate (lint, unit,
+#                 integration, security, build) is its own flow with
+#                 its own runner, timeout, retry policy, and output
+#                 shape. Reusable across projects / branches /
+#                 environments. Today they must be tools, which means
+#                 a project that wants to add a new gate (e.g., a
+#                 visual-regression check) has to inline it into the
+#                 mega-tool.
+#
+#   blocked: #10  optional types — deploy_id only on success;
+#                 rollback_at only on rollback; approver_id only on
+#                 production deploys; blocking_gates only on
+#                 fail outcomes.
+#
+#   blocked: #11  sum types / variants — SECOND OCCURRENCE in the
+#                 corpus (first at flow #10 dispute evidence). The
+#                 GateResult type is naturally a variant:
+#                   Pass {duration}
+#                   Fail {reason, log_url, suggestion}
+#                   Skipped {because: string}
+#                   InfraError {retry_at}
+#                 The aggregator pattern-matches on the variant tag.
+#                 Encoding as one fat record with all fields
+#                 optional (status: string + reason: string + log_url:
+#                 string + retry_at: int + because: string) loses
+#                 the invariant that {reason, log_url} only appear on
+#                 Fail and retry_at only on InfraError. Watch for
+#                 third occurrence in #18 refinement or #19
+#                 decomposition.
+#
+#   blocked: #12  time / scheduling — three sub-shapes:
+#                 12a DEADLINES: 15-minute health-check window
+#                     (Render's hard cancel time).
+#                 12b PAUSE-AND-RESUME: manual approval gate;
+#                     production deploy pauses arbitrarily long
+#                     waiting for a human Approve click.
+#                 12c SCHEDULED FUTURE TRIGGER: smoke tests fire at
+#                     deploy_time + 2min; health checks probe at
+#                     30-second intervals.
+#                 The first flow to hit ALL three 12 sub-shapes in
+#                 one workflow. Strong signal that #12 must be split
+#                 in the rubric — they need different language
+#                 features.
+#
+#   blocked: #14  (PROMOTED at flow #7) lazy / short-circuit
+#                 evaluation. Seventh occurrence. Here the motivation
+#                 is correctness, not cost: cancel the in-flight
+#                 10-minute integration test when 30-second lint
+#                 already failed. Same primitive (don't compute /
+#                 cancel in-flight), different driving force. The
+#                 corpus has now shown three motivations for the
+#                 short-circuit primitive: cost (#3, #6, #7), policy
+#                 correctness (#9), and fail-fast (#12).
+#
+#   blocked: #15  (PROMOTED at flow #9) list-literal construction.
+#                 Fifth occurrence. required_gates list per
+#                 environment; blocking_gates list per failure.
+#
+#   blocked: #13  Other: aggregation primitives (all / any / fold).
+#                 Third occurrence (flow #4 research, flow #8 import,
+#                 now flow #12). `all_required_passed = all(results,
+#                 r -> r.required ⇒ r.status == "pass")` is the
+#                 aggregate-gate's whole job. With three occurrences,
+#                 this clears the promotion threshold. PROMOTE to
+#                 slot #16 before Friday.
+#
+#   blocked: #13  Other: no string literals — gate names, status
+#                 enums, environment enums. Recurring.
+#
+#   shippable: N — the workflow that compiles below has a hard-coded
+#                  5-gate panel. Adding a 6th gate means editing the
+#                  flow's parameter list and the aggregator's
+#                  signature. Production CI configs add and remove
+#                  gates routinely (a security team rolls out a new
+#                  SAST gate; a perf team trials a new bundle-size
+#                  check). The Flow source cannot accommodate that
+#                  evolution without ripping the type signatures
+#                  every time.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: fixed 5-gate fan-out (serialised), single
+# aggregate tool that hides the required-vs-optional policy, no
+# approval gate, no post-deploy health check, no smoke test, no
+# rollback. The deploy decision is returned before any deploy
+# actually happens.
+
+type DeployRequest   = { commit_sha:  string,
+                       branch:      string,
+                       environment: string }
+
+type GateResult      = { name:        string,
+                       status:      string,
+                       duration_ms: int,
+                       log_url:     string,
+                       reason:      string }
+
+type DeployDecision  = { allowed:         bool,
+                       blocking_gates:  [string],
+                       requires_approval: bool,
+                       reason:          string }
+
+tool run_lint                (commit_sha: string)        -> GateResult
+  effect deterministic
+tool run_unit_tests          (commit_sha: string)        -> GateResult
+  effect deterministic
+tool run_integration_tests   (commit_sha: string)        -> GateResult
+  effect deterministic
+tool run_security_scan       (commit_sha: string)        -> GateResult
+  effect deterministic
+tool run_build_verify        (commit_sha: string)        -> GateResult
+  effect deterministic
+tool aggregate_gates         (lint:        GateResult,
+                              unit:        GateResult,
+                              integ:       GateResult,
+                              security:    GateResult,
+                              build:       GateResult,
+                              environment: string)       -> DeployDecision
+  effect pure
+
+flow gate_deploy(DeployRequest) -> DeployDecision {
+  # awkward: five independent gates run sequentially — wall-clock
+  # collapses (~10min budget exceeded). Counts toward #2.
+  lint     = run_lint(it.commit_sha)
+  unit     = run_unit_tests(it.commit_sha)
+  integ    = run_integration_tests(it.commit_sha)
+  security = run_security_scan(it.commit_sha)
+  build    = run_build_verify(it.commit_sha)
+
+  # workaround: the required-vs-optional policy, the per-environment
+  # gate set, the conditional gates by file pattern, and the
+  # short-circuit fail-fast all collapse into one tool. The aggregator
+  # also takes a fixed 5-tuple — adding a new gate type means editing
+  # this signature everywhere. Counts toward #1, #4, #5, #7, #11, #15.
+  decision = aggregate_gates(lint, unit, integ, security, build, it.environment)
+
+  decision
+}

@@ -1,0 +1,1 @@
+tests/fixtures/unsupported_version.ir.json: error[R150]: unsupported IR version '0.1' (expected '1.0')

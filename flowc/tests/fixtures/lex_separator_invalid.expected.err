@@ -1,0 +1,1 @@
+tests/fixtures/lex_separator_invalid.flow:2:3: error[E106]: invalid digit separator in '1__0'; '_' must appear between digits, as in 1_000

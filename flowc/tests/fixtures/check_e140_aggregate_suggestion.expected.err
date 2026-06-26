@@ -1,0 +1,1 @@
+tests/fixtures/check_e140_aggregate_suggestion.flow:7:26: error[E140]: no field 'cst' on type 'Item'; did you mean 'cost'?

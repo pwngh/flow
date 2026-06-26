@@ -1,0 +1,1 @@
+tests/fixtures/resolve_unknown_binding.flow:4:7: error[E124]: reference to unknown name 'some_undefined_name'

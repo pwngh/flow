@@ -1,0 +1,1 @@
+tests/fixtures/lex_e102_long_ident.flow:1:6: error[E102]: identifier exceeds 1024-byte limit (got 1025 bytes)

@@ -1,0 +1,37 @@
+Program tests/fixtures/parse_smoke.flow
+  TypeDecl @1:1 User (record)
+    Field @1:15 id : string
+    Field @1:27 email : string
+  TypeDecl @2:1 Plan (record)
+    Field @2:15 id : string
+    Field @2:27 cost : int
+  ToolDecl @4:1 create_user
+    Param @4:18 email : string
+    return-type: User
+    effect: deterministic
+  ToolDecl @6:1 best_plan
+    Param @6:16 user : User
+    return-type: [Plan]
+    effect: deterministic
+  FlowDecl @9:1 signup (implicit it)
+    Param @9:13 it : User
+    return-type: Plan
+    Binding @10:3 user
+      Call @10:10 create_user
+        Arg @10:22 (shorthand)
+          Path @10:22 it.email
+    Binding @11:3 plan
+      Pipeline @11:10
+        source:
+          Call @11:10 best_plan
+            Arg @11:20 (shorthand)
+              Path @11:20 user
+        Stage-Where @12:10
+          Predicate-Cmp @12:16
+            Cmp @12:16 <=
+              Path @12:16 cost
+              Literal-Int @12:24 100
+        Stage-Rank @13:10 field=cost asc
+        Stage-Terminal @14:10 pick using=primary
+    return:
+      Path @15:3 plan

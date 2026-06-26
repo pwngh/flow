@@ -1,0 +1,184 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/signup_tiered.flow",
+  "types": [
+    {
+      "name": "SignupRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "email", "type": "string"},
+        {"name": "payment_token", "type": "string"}
+      ]
+    },
+    {
+      "name": "Customer",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "email", "type": "string"}
+      ]
+    },
+    {
+      "name": "Subscription",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "status", "type": "string"}
+      ]
+    },
+    {
+      "name": "SignupResult",
+      "kind": "record",
+      "fields": [
+        {"name": "customer", "type": "Customer"},
+        {"name": "sub", "type": "Subscription"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "create_customer",
+      "input": [
+        {"name": "email", "type": "string"}
+      ],
+      "output": "Customer",
+      "effect": {
+        "level": "mutation"
+      }
+    },
+    {
+      "name": "attach_payment_method",
+      "input": [
+        {"name": "customer", "type": "Customer"},
+        {"name": "token", "type": "string"}
+      ],
+      "output": "bool",
+      "effect": {
+        "level": "mutation"
+      }
+    },
+    {
+      "name": "create_paid_subscription",
+      "input": [
+        {"name": "customer", "type": "Customer"}
+      ],
+      "output": "Subscription",
+      "effect": {
+        "level": "mutation"
+      }
+    },
+    {
+      "name": "send_welcome_email",
+      "input": [
+        {"name": "customer", "type": "Customer"}
+      ],
+      "output": "bool",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "signup",
+      "params": [
+        {"name": "it", "type": "SignupRequest", "implicit": true}
+      ],
+      "output": "SignupResult",
+      "bindings": [
+        {
+          "name": "customer",
+          "expr": {
+            "kind": "call",
+            "tool": "create_customer",
+            "args": [
+              {
+                "field": "email",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "email"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "paid_ok",
+          "expr": {
+            "kind": "call",
+            "tool": "attach_payment_method",
+            "args": [
+              {
+                "field": "customer",
+                "value": {
+                  "kind": "path",
+                  "segments": ["customer"]
+                }
+              },
+              {
+                "field": "token",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "payment_token"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "sub",
+          "expr": {
+            "kind": "call",
+            "tool": "create_paid_subscription",
+            "args": [
+              {
+                "field": "customer",
+                "value": {
+                  "kind": "path",
+                  "segments": ["customer"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "emailed",
+          "expr": {
+            "kind": "call",
+            "tool": "send_welcome_email",
+            "args": [
+              {
+                "field": "customer",
+                "value": {
+                  "kind": "path",
+                  "segments": ["customer"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "construct",
+        "type": "SignupResult",
+        "fields": [
+          {
+            "name": "customer",
+            "value": {
+              "kind": "path",
+              "segments": ["customer"]
+            }
+          },
+          {
+            "name": "sub",
+            "value": {
+              "kind": "path",
+              "segments": ["sub"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

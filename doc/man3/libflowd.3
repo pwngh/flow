@@ -1,0 +1,345 @@
+.TH LIBFLOWD 3 "May 2026" "" "Flow Manual"
+.SH NAME
+libflowd \- the Flow runtime library
+.SH SYNOPSIS
+.nf
+.B #include <flowd.h>
+
+flowd_runtime *flowd_load_ir(const char *ir_json);
+
+int flowd_register_tool(flowd_runtime *rt, const char *name,
+                        flowd_effect_level level,
+                        const char *signature,
+                        flowd_tool_fn implementation,
+                        const char *impl_version,
+                        void *user_ctx);
+
+int flowd_register_model(flowd_runtime *rt, const char *name,
+                         const char *signature,
+                         flowd_model_fn implementation,
+                         const char *impl_version,
+                         void *user_ctx);
+
+int flowd_register_provider(flowd_runtime *rt,
+                            const flowd_provider_adapter_t *adapter);
+
+int flowd_set_redactor(flowd_runtime *rt,
+                       flowd_redactor_fn redactor,
+                       void *user_ctx);
+
+int flowd_set_budget(flowd_runtime *rt,
+                     uint64_t tokens_limit,
+                     double cost_cents_limit,
+                     uint64_t elapsed_ms_limit);
+
+int flowd_cancel(flowd_runtime *rt);
+
+char *flowd_run(flowd_runtime *rt, const char *input_json,
+                const char *trace_dir,
+                char **suspension_token);
+
+char *flowd_run_named(flowd_runtime *rt, const char *flow_name,
+                      const char *input_json,
+                      const char *trace_dir,
+                      char **suspension_token);
+
+char *flowd_replay(flowd_runtime *rt, const char *flow_name,
+                   const char *original_trace_dir,
+                   const char *new_trace_dir,
+                   const char *new_model_id);
+
+char *flowd_resume(flowd_runtime *rt, const char *token,
+                   const char *decision_json,
+                   char **suspension_token);
+
+char *flowd_last_error_json(flowd_runtime *rt);
+
+void flowd_destroy(flowd_runtime *rt);
+.fi
+.SH DESCRIPTION
+.B libflowd
+loads a Flow IR document, registers tool and model
+implementations against it, and runs flows against typed inputs.
+Each execution writes a complete trace directory recording
+inputs, intermediate values, model identities, and outputs of
+every node.
+.PP
+The library is non-reentrant per
+.B flowd_runtime
+handle.  Callers must serialize calls to a given runtime, or use
+one runtime per thread.  This is the static public surface;
+dynamic-load entry points \(em compiling a
+.I .flow
+source rather than loading a pre-compiled IR document \(em are
+planned for a separate
+.I flowd_dynamic.h
+header, added later without rewriting this surface.
+.SH FUNCTIONS
+.TP
+.B flowd_load_ir
+Load an IR document.  Returns NULL on any error;
+.B flowd_last_error_json(NULL)
+returns the diagnostic.
+.TP
+.B flowd_register_tool
+Register a tool implementation against the IR's declared tool of
+the same name.  Returns 0 on success or an R15x code; see
+.B ERRORS
+below.  The
+.I signature
+is the tool's input and output type written in Flow's surface
+syntax, e.g.
+.BR \(dq(string) -> CreditHistory\(dq .
+.I impl_version
+is host-chosen and recorded in every trace this runtime produces.
+.TP
+.B flowd_register_model
+Register a model implementation.  Models are always at effect
+level
+.BR FLOWD_EFFECT_MODEL ;
+the level is implied.
+.TP
+.B flowd_register_provider
+Register a provider adapter with the gateway.  Adapters are
+tried in registration order; the first whose
+.B supports_model
+returns non-zero handles each model call.  When an adapter is
+registered, model calls route through the gateway by preference;
+.B flowd_register_model
+remains supported as a fallback for hosts that prefer per-model
+function pointers.  Secrets (API keys) enter the runtime through
+the adapter's
+.B user_ctx
+and must never appear in flow inputs or in the recorded inputs of
+any tool call.  This is the three-layer secrets pattern:
+convention, adapter discipline, and the redactor hook
+.RB ( flowd_set_redactor ).
+.PP
+.RS
+The adapter struct carries two invocation entry points.
+.B invoke
+returns the response JSON as a heap-allocated string or NULL with
+.I *err_msg
+set.
+.B invoke_with_metrics
+(optional) fills a
+.B flowd_adapter_response_t
+with response JSON, error message, and provider-reported
+.IR tokens_in ,
+.IR tokens_out ,
+and
+.IR cost_cents .
+The gateway prefers
+.B invoke_with_metrics
+when set and rolls reported tokens and cost into the run's budget.
+An adapter must set at least one of the two pointers.
+.RE
+.TP
+.B flowd_set_redactor
+Install a host-supplied byte-rewrite callback that the trace
+writer applies to every value it persists.  This is layer 3 of
+the three-layer secrets pattern \(em a defense-in-depth hook for
+the case where layers 1 (convention) or 2 (adapter discipline)
+were violated.  The callback receives canonical bytes and returns
+either a heap-allocated transformed buffer (the runtime frees it)
+or NULL to leave the original bytes untouched.  The hash chain in
+the content-addressed value store runs on the redacted form, so
+two values whose pre-redaction forms differed but whose redacted
+forms match share content addresses.  Replaces any prior redactor;
+passing NULL clears.
+.TP
+.B flowd_set_budget
+Set a per-run budget for subsequent runs on this runtime.  Each
+limit caps a run's cumulative total across all model calls; a limit
+of 0 means no limit for that dimension.  When a model call would
+exceed a limit it fails with
+.B R161
+and the run returns NULL.  Token and cost figures come from
+metrics-reporting provider adapters, and cached model calls are
+counted as well.  Usage resets at the start of each run.
+.TP
+.B flowd_cancel
+Request cooperative cancellation of the in-progress run.  The
+executor checks at each binding boundary and, if set, aborts: the
+run returns NULL, its trace is sealed with status
+.BR cancelled ,
+and the error is
+.BR R160 .
+Intended to be called while a run is in flight \(em from a signal
+handler, another thread, or a tool callback (it sets a
+.BR sig_atomic_t ).
+The flag clears at the start of every run.
+.TP
+.B flowd_run
+Run a flow.  Returns the flow's output JSON on completion (caller
+frees), or NULL on suspension or error.  Inspect
+.I *suspension_token
+to distinguish suspension (non-NULL) from error (NULL).
+.TP
+.B flowd_run_named
+Run a specific named flow from a multi-flow IR.  Behaves like
+.B flowd_run
+otherwise.  Returns NULL with
+.B R155
+in
+.B flowd_last_error_json
+if
+.I flow_name
+is not declared in the loaded IR.
+.TP
+.B flowd_replay
+Re-execute a previously recorded flow run, writing a new trace.
+.I flow_name
+must match the recorded flow's name.
+.I original_trace_dir
+is the trace directory produced by an earlier
+.BR flowd_run ;
+.I new_trace_dir
+is the root under which the replay's new trace is written (by
+convention distinct from the original's root so the original is
+preserved).  A NULL
+.I new_model_id
+selects same-model replay \(em every model call restores its
+recorded output and no provider is invoked; a non-NULL
+.I new_model_id
+selects model-versioned replay \(em every model call re-invokes
+via the gateway against that model id, with the inputs the
+original recorded.  Returns the replay's output JSON on success
+(caller frees) or NULL on error.  Every node in the new trace
+carries a
+.B replay_of
+cross-reference pointing at the corresponding node in the
+original.
+.TP
+.B flowd_resume
+Resume a suspended flow.  The runtime writes a new trace
+directory linked to the original by
+.B resumed_from
+on the new manifest and by per-node
+.B replay_of
+cross-references.  Those cross-references cover the pre-suspension
+restored nodes, the suspended node, and the synthesized input and
+output nodes; nodes that run live after the suspension point do not
+carry
+.BR replay_of .
+The original suspended trace is unchanged.  See
+.BR flow-suspension (7)
+and
+.BR flow-trace (5)
+for the contract.
+.PP
+.RS
+.I decision_json
+is the value injected at the suspension point; it must conform
+to the suspended tool's declared output type.  For the built-in
+.B await_human_approval
+tool, this is the approval payload (approver, decision,
+rationale, timestamp, policy_ref).
+.RE
+.TP
+.B flowd_last_error_json
+Return the most recent error as a JSON object (caller frees).
+Returns NULL when no error is pending.  The call is read-and-clear
+\(em it returns the stored pointer and resets the slot to NULL, so a
+second call without an intervening failure returns NULL.  The error slot is
+process-global, not per-runtime: the
+.I rt
+argument is ignored, the call returns whatever error was recorded
+last by any runtime (or by a failed
+.BR flowd_load_ir ),
+and passing NULL is equivalent to passing any handle.  With more
+than one runtime live in a process, callers must serialize the
+operation that fails with the
+.B flowd_last_error_json
+call that reads its error.
+.TP
+.B flowd_destroy
+Destroy a runtime handle.  Safe to call with NULL.
+.SH CALLBACK OWNERSHIP
+.B flowd_tool_fn
+and
+.B flowd_model_fn
+return
+.B char *
+heap-allocated by the callee.  The runtime calls
+.B free
+on the returned buffer after consuming it.  On error, the
+callback returns NULL and sets
+.I *err_json
+to a heap-allocated JSON error object \(em also freed by the
+runtime.
+.SH EFFECT LEVELS
+.TP
+.B FLOWD_EFFECT_PURE
+Level 0: no I/O.  Memoizable freely; replayable locally without
+re-invocation.
+.TP
+.B FLOWD_EFFECT_DETERMINISTIC
+Level 1: external lookup, no side effects.  Cacheable; replay
+restores from trace by default.
+.TP
+.B FLOWD_EFFECT_MODEL
+Level 2: nondeterministic by nature (LLMs, samplers, human
+judgment).  Model-versioned replay re-invokes against a different
+model identity with the recorded inputs.
+.TP
+.B FLOWD_EFFECT_MUTATION
+Level 3: side-effectful.  Not safely retryable without
+idempotency tokens.  Replay restores from trace and does NOT
+re-invoke.
+.SH ERRORS
+.B flowd_register_tool
+and
+.B flowd_register_model
+return 0 on success or one of:
+.TP
+.B R151
+Effect-level mismatch with the IR's declaration. Also returned by
+.B flowd_register_tool
+for a model-level tool, which must be registered through
+.BR flowd_register_model .
+.TP
+.B R152
+No tool of this name in the IR.
+.PP
+The
+.I signature
+argument is recorded but not yet validated against the IR's
+declared type, so registration never fails on a signature
+mismatch.
+.PP
+.B flowd_register_provider
+returns 0 on success or
+.B 150
+if the adapter struct is malformed (missing the required function
+pointers).
+.PP
+The execution entry points report their failure cause through
+.BR flowd_last_error_json .
+A few conditions have dedicated codes:
+.B R160
+for cancellation (see
+.BR flowd_cancel ),
+.B R161
+for a budget overrun (see
+.BR flowd_set_budget ),
+and
+.B R157
+for a replay or resume that cannot proceed because a node's
+re-derived input no longer matches the recorded input.
+.B R155
+is the runtime's generic catch-all for runtime-error conditions
+that have no dedicated code of their own.  Thus
+.B flowd_run_named
+returns NULL with
+.B R155
+when
+.I flow_name
+is not declared in the loaded IR, and
+.B flowd_resume
+returns
+.B R155
+when
+.I decision_json
+does not conform to the suspended tool's declared output type \(em
+both reported under the same catch-all code.

@@ -1,0 +1,1 @@
+tests/fixtures/cli_w103_checkonly_with_dump.flow:1:1: warning[W103]: --check-only has no effect with a non-IR --dump stage; the dump is produced anyway

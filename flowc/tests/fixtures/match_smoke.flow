@@ -1,0 +1,15 @@
+type Hypothesis =
+  | DeployCaused  { suspect_deploy_id: string }
+  | CapacityIssue { resource: string }
+  | Unknown       { confidence: float }
+
+flow describe(string) -> string {
+  h = DeployCaused { suspect_deploy_id: it }
+  outcome =
+    match h {
+      DeployCaused d  -> d.suspect_deploy_id,
+      CapacityIssue _ -> it,
+      _               -> it
+    }
+  outcome
+}

@@ -1,0 +1,145 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "2026-06-15T23:39:03Z",
+  "source_file": "bindings/python/examples/onboarding.flow",
+  "types": [
+    {
+      "name": "Applicant",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "email", "type": "string"},
+        {"name": "amount", "type": "int"}
+      ]
+    },
+    {
+      "name": "CreditReport",
+      "kind": "record",
+      "fields": [
+        {"name": "score", "type": "int"},
+        {"name": "history_years", "type": "int"}
+      ]
+    },
+    {
+      "name": "RiskDecision",
+      "kind": "record",
+      "fields": [
+        {"name": "approve", "type": "bool"},
+        {"name": "band", "type": "string"},
+        {"name": "rationale", "type": "string"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "fetch_credit",
+      "input": [
+        {"name": "id", "type": "string"}
+      ],
+      "output": "CreditReport",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "assess_risk",
+      "input": [
+        {"name": "report", "type": "CreditReport"},
+        {"name": "amount", "type": "int"}
+      ],
+      "output": "RiskDecision",
+      "effect": {
+        "level": "model",
+        "model": "claude-underwriter-v1"
+      }
+    },
+    {
+      "name": "notify_applicant",
+      "input": [
+        {"name": "email", "type": "string"},
+        {"name": "band", "type": "string"}
+      ],
+      "output": "bool",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "onboard",
+      "params": [
+        {"name": "it", "type": "Applicant", "implicit": true}
+      ],
+      "output": "RiskDecision",
+      "bindings": [
+        {
+          "name": "report",
+          "expr": {
+            "kind": "call",
+            "tool": "fetch_credit",
+            "args": [
+              {
+                "field": "id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "decision",
+          "expr": {
+            "kind": "call",
+            "tool": "assess_risk",
+            "args": [
+              {
+                "field": "report",
+                "value": {
+                  "kind": "path",
+                  "segments": ["report"]
+                }
+              },
+              {
+                "field": "amount",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "amount"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "sent",
+          "expr": {
+            "kind": "call",
+            "tool": "notify_applicant",
+            "args": [
+              {
+                "field": "email",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "email"]
+                }
+              },
+              {
+                "field": "band",
+                "value": {
+                  "kind": "path",
+                  "segments": ["decision", "band"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["decision"]
+      }
+    }
+  ]
+}

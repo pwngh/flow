@@ -1,0 +1,132 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/streaming_summary.flow",
+  "types": [
+    {
+      "name": "StreamRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "session_id", "type": "string"},
+        {"name": "query", "type": "string"},
+        {"name": "max_tokens", "type": "int"}
+      ]
+    },
+    {
+      "name": "StreamEvent",
+      "kind": "record",
+      "fields": [
+        {"name": "kind", "type": "string"},
+        {"name": "sequence_number", "type": "int"},
+        {"name": "text_delta", "type": "string"},
+        {"name": "token_index", "type": "int"},
+        {"name": "tool_name", "type": "string"},
+        {"name": "partial_json", "type": "string"},
+        {"name": "citation_marker", "type": "string"},
+        {"name": "citation_url", "type": "string"},
+        {"name": "usage_tokens", "type": "int"},
+        {"name": "finish_reason", "type": "string"},
+        {"name": "error_message", "type": "string"},
+        {"name": "error_recoverable", "type": "bool"}
+      ]
+    },
+    {
+      "name": "StreamResult",
+      "kind": "record",
+      "fields": [
+        {"name": "session_id", "type": "string"},
+        {"name": "events", "type": "[StreamEvent]"},
+        {"name": "final_text", "type": "string"},
+        {"name": "total_tokens", "type": "int"},
+        {"name": "status", "type": "string"},
+        {"name": "finished_at", "type": "int"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "generate_response_stream",
+      "input": [
+        {"name": "query", "type": "string"},
+        {"name": "max_tokens", "type": "int"},
+        {"name": "session_id", "type": "string"}
+      ],
+      "output": "[StreamEvent]",
+      "effect": {
+        "level": "model",
+        "model": "stream-gen-v1"
+      }
+    },
+    {
+      "name": "finalize_response",
+      "input": [
+        {"name": "events", "type": "[StreamEvent]"}
+      ],
+      "output": "StreamResult",
+      "effect": {
+        "level": "pure"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "stream_answer",
+      "params": [
+        {"name": "it", "type": "StreamRequest", "implicit": true}
+      ],
+      "output": "StreamResult",
+      "bindings": [
+        {
+          "name": "events",
+          "expr": {
+            "kind": "call",
+            "tool": "generate_response_stream",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              },
+              {
+                "field": "max_tokens",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "max_tokens"]
+                }
+              },
+              {
+                "field": "session_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "session_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "result",
+          "expr": {
+            "kind": "call",
+            "tool": "finalize_response",
+            "args": [
+              {
+                "field": "events",
+                "value": {
+                  "kind": "path",
+                  "segments": ["events"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["result"]
+      }
+    }
+  ]
+}

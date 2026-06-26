@@ -1,0 +1,1 @@
+tests/fixtures/check_e154_terminal_not_last.flow:9:7: error[E154]: terminal stage appears before the end of the pipeline

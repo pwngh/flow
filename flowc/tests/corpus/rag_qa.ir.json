@@ -1,0 +1,240 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/rag_qa.flow",
+  "types": [
+    {
+      "name": "Question",
+      "kind": "record",
+      "fields": [
+        {"name": "query", "type": "string"},
+        {"name": "top_k", "type": "int"},
+        {"name": "top_n", "type": "int"},
+        {"name": "namespace", "type": "string"},
+        {"name": "recency_weight", "type": "float"}
+      ]
+    },
+    {
+      "name": "Source",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "kind", "type": "string"},
+        {"name": "text", "type": "string"},
+        {"name": "score", "type": "float"},
+        {"name": "url", "type": "string"},
+        {"name": "domain", "type": "string"},
+        {"name": "page", "type": "int"},
+        {"name": "published_at", "type": "int"},
+        {"name": "doc_id", "type": "string"},
+        {"name": "entity_id", "type": "string"}
+      ]
+    },
+    {
+      "name": "Citation",
+      "kind": "record",
+      "fields": [
+        {"name": "source_id", "type": "string"},
+        {"name": "text_position", "type": "int"},
+        {"name": "quote", "type": "string"}
+      ]
+    },
+    {
+      "name": "Answer",
+      "kind": "record",
+      "fields": [
+        {"name": "text", "type": "string"},
+        {"name": "citations", "type": "[Citation]"},
+        {"name": "confidence", "type": "float"},
+        {"name": "sources_used", "type": "[Source]"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "retrieve_vectors",
+      "input": [
+        {"name": "query", "type": "string"},
+        {"name": "top_k", "type": "int"},
+        {"name": "namespace", "type": "string"}
+      ],
+      "output": "[Source]",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "retrieve_keywords",
+      "input": [
+        {"name": "query", "type": "string"},
+        {"name": "top_k", "type": "int"},
+        {"name": "namespace", "type": "string"}
+      ],
+      "output": "[Source]",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "rerank",
+      "input": [
+        {"name": "query", "type": "string"},
+        {"name": "vec_hits", "type": "[Source]"},
+        {"name": "kw_hits", "type": "[Source]"},
+        {"name": "top_n", "type": "int"}
+      ],
+      "output": "[Source]",
+      "effect": {
+        "level": "model",
+        "model": "rerank-v1"
+      }
+    },
+    {
+      "name": "generate_answer",
+      "input": [
+        {"name": "query", "type": "string"},
+        {"name": "sources", "type": "[Source]"}
+      ],
+      "output": "Answer",
+      "effect": {
+        "level": "model",
+        "model": "answer-v1"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "answer",
+      "params": [
+        {"name": "it", "type": "Question", "implicit": true}
+      ],
+      "output": "Answer",
+      "bindings": [
+        {
+          "name": "vec_hits",
+          "expr": {
+            "kind": "call",
+            "tool": "retrieve_vectors",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              },
+              {
+                "field": "top_k",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "top_k"]
+                }
+              },
+              {
+                "field": "namespace",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "namespace"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "kw_hits",
+          "expr": {
+            "kind": "call",
+            "tool": "retrieve_keywords",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              },
+              {
+                "field": "top_k",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "top_k"]
+                }
+              },
+              {
+                "field": "namespace",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "namespace"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "reranked",
+          "expr": {
+            "kind": "call",
+            "tool": "rerank",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              },
+              {
+                "field": "vec_hits",
+                "value": {
+                  "kind": "path",
+                  "segments": ["vec_hits"]
+                }
+              },
+              {
+                "field": "kw_hits",
+                "value": {
+                  "kind": "path",
+                  "segments": ["kw_hits"]
+                }
+              },
+              {
+                "field": "top_n",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "top_n"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "result",
+          "expr": {
+            "kind": "call",
+            "tool": "generate_answer",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              },
+              {
+                "field": "sources",
+                "value": {
+                  "kind": "path",
+                  "segments": ["reranked"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["result"]
+      }
+    }
+  ]
+}

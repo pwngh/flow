@@ -1,0 +1,317 @@
+# product_search.flow — corpus flow #16 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Shopify's published architecture for the generative
+# recommender ("ensemble where multiple retrieval models generate
+# candidates, rankers reorder them, and aggregation layers handle
+# deduplication, diversity, and business constraints") plus the
+# semantic-search ranking used in Search & Discovery. Algolia
+# merchandising rules (pin / hide / boost / bury / filter /
+# Dynamic Re-Ranking; Smart Groups for inventory-aware placement).
+#
+# A product-search workflow has this shape:
+#
+#   query parse    tokenize, expand synonyms, detect intent
+#                  (product / category / brand / typo-correction)
+#
+#   retrieve       PARALLEL ensemble:
+#                    BM25 / lexical
+#                    vector / semantic
+#                    category match
+#                    personalized (user history)
+#                  each returns candidate products
+#
+#   score          combine signals per product:
+#                    relevance * w_rel
+#                  + popularity * w_pop
+#                  + margin    * w_margin    (merchandising)
+#                  + stock     * w_stock     (out-of-stock = penalty)
+#                  + recency   * w_recency
+#                  + personalization
+#                  weights are tuned per category / season
+#
+#   business rules apply Algolia-style merchandising:
+#                    pin       force item to position N
+#                    hide      remove item
+#                    boost     multiplier on category
+#                    bury      negative multiplier
+#                    filter    drop by attribute
+#                    redirect  whole-query override → landing page
+#
+#   aggregate      dedupe (variant collapses), diversity (cap N from
+#                  same brand), faceting (count per attribute)
+#
+#   pick top-N     for the results grid (typically 20–60)
+#                  ALSO pick top-1 for the "featured" / "best match"
+#                  slot some UIs render above the grid
+#
+#   stream facets  surface facet counts to UI as candidates are
+#                  scored (Algolia ships them alongside hits)
+#
+# Three load-bearing facts:
+#
+#   (a) Score arithmetic IS the merchandising logic. The weighted
+#       sum `w_rel·relevance + w_margin·margin + w_stock·stock + …`
+#       is the place the business expresses its preferences. Hiding
+#       it inside an opaque tool moves the merchandising policy out
+#       of the workflow and into the tool's source, where the
+#       merchandiser (a non-engineer) cannot edit it. Fourth corpus
+#       occurrence of #8 expression ops (flows #11 scheduling, #13
+#       RAG, #15 SLO math, now #16). Across four distinct domains
+#       — incontrovertibly general.
+#
+#   (b) The pipeline form `| where | rank | pick using` is a
+#       PARTIAL fit for this domain. It expresses "best single
+#       match" cleanly — pick using primary returns one Product
+#       for the featured slot. It does NOT express "top N for the
+#       grid" because `pick using` is a single-element terminal.
+#       Same near-miss as flow #13 RAG; the language has the
+#       beginning of what merchandising needs but stops one step
+#       short. A `take-n` stage form, or a `top` stage with
+#       documented top-N semantics, would close the gap without a
+#       deep redesign — this is a candidate for a SMALL language
+#       addition rather than a redesign.
+#
+#   (c) Merchandising rules are themselves a sum type, mirroring
+#       flows #10 / #12 / #13 / #14 / #15. A pin rule carries
+#       {product_id, position}; a hide rule carries {filter_expr};
+#       a boost rule carries {category, factor}; a redirect rule
+#       carries {url, condition}. Sixth corpus occurrence of #11.
+#       At this point the absence of variants is among the most
+#       expensive workarounds in the corpus.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow search(SearchRequest) -> SearchResult {
+#     intent = parse_query(it.query)
+#
+#     # parallel ensemble retrieval:
+#     candidates = concat(
+#       retrieve_lexical(it.query, it.page_size * 3),
+#       retrieve_semantic(it.query, it.page_size * 3),
+#       retrieve_personalised(it.query, it.customer_id, it.page_size),
+#     )
+#
+#     # score per product with expression-ops arithmetic:
+#     scored = map(unique_by(candidates, p -> p.id), p -> {
+#       p with { score: it.w_rel * p.relevance
+#                     + it.w_margin * normalize(p.margin_bps)
+#                     + it.w_stock  * stock_signal(p.stock_count)
+#                     + it.w_recency * recency_decay(p.added_at)
+#                     + personal_boost(p, it.customer_id) }
+#     })
+#
+#     # apply merchandising rules (variant dispatch):
+#     ruled = fold(it.merchandising_rules, scored, acc, rule ->
+#       match rule {
+#         Pin {product_id, position}   -> pin_at(acc, product_id, position)
+#         Hide {filter}                -> filter_out(acc, filter)
+#         Boost {category, factor}     -> boost_category(acc, category, factor)
+#         Bury {category, factor}      -> boost_category(acc, category, 1.0/factor)
+#         FilterBy {attr, value}       -> keep_where(acc, attr, value)
+#         Redirect {url, condition}    -> short_circuit_to(url, condition)
+#       }
+#     )
+#
+#     # diversity + dedupe (aggregation primitives):
+#     diverse = enforce_brand_diversity(ruled, max_per_brand: 3)
+#
+#     # pipeline form fits the "best single match" slot genuinely:
+#     featured = diverse
+#              | where stock_count > 0 and margin_bps >= 100
+#              | rank score desc
+#              | pick using primary
+#
+#     # top-N for the grid — NOT expressible with pipeline form:
+#     top_picks = take(diverse, it.page_size)
+#
+#     # stream facet counts to UI as scoring completes:
+#     emit_facet_stream(diverse)
+#
+#     SearchResult { featured, results: top_picks,
+#                    facets: facet_counts(diverse),
+#                    total_count: size(diverse) }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #2   parallel fan-out + join — ensemble retrieval over
+#                 3+ models simultaneously is the Shopify-documented
+#                 production shape. Sequential collapses latency past
+#                 the typical 200ms search SLA.
+#
+#   blocked: #4   loops / fold over list — map over candidates for
+#                 scoring; fold over merchandising rules; filter and
+#                 dedupe. Five distinct uses; merchandising-rules
+#                 fold is the new shape (rules are data, applied to
+#                 a working set in sequence).
+#
+#   blocked: #5   conditional binding — personalization only if the
+#                 customer is known; diversity enforcement only for
+#                 large result sets; redirect rule short-circuits
+#                 the whole flow when its condition fires.
+#
+#   blocked: #7   sub-flow composition — PREDICTED. Per-retrieval-
+#                 model is a sub-flow with its own pre/post
+#                 processing (lexical normalisation differs from
+#                 semantic embedding). Per-merchandising-rule
+#                 evaluation is a small flow.
+#
+#   blocked: #8   string / numeric EXPRESSION OPS — fourth corpus
+#                 occurrence (across four distinct domains:
+#                 scheduling #11, RAG #13, incident #15, merchandising
+#                 #16). Score arithmetic IS the merchandising
+#                 policy here; without expression ops the policy
+#                 lives inside an opaque scoring tool where the
+#                 merchandiser cannot tune it. This is a confirmed
+#                 general gap, not a corner case.
+#
+#   blocked: #10  optional types — customer_id absent on anonymous
+#                 search; facets empty list on no-results; featured
+#                 absent if no in-stock items match.
+#
+#   blocked: #11  sum types / variants — SIXTH corpus occurrence.
+#                 Merchandising rules are variants — Pin / Hide /
+#                 Boost / Bury / FilterBy / Redirect each carry
+#                 structurally different fields. Encoding as a fat
+#                 record with all possible fields (product_id,
+#                 position, filter, category, factor, attr, value,
+#                 url, condition) and a kind tag forces 7+ fields
+#                 always-present and discards the type-system
+#                 invariant that ties fields to kind. After six
+#                 distinct domains, #11 is the rubric's most
+#                 broadly-supported language change.
+#
+#   blocked: #14  lazy / short-circuit evaluation — eleventh corpus
+#                 occurrence. Redirect rule should short-circuit
+#                 the entire pipeline (bypass retrieve / score /
+#                 rank when a configured redirect fires); semantic
+#                 retrieval can be skipped if lexical returned a
+#                 high-confidence exact match.
+#
+#   blocked: #15  list-literal construction — ninth occurrence.
+#                 Brand-allow list; merchandising-rule list;
+#                 facet-attr list.
+#
+#   blocked: #16  aggregation primitives — seventh occurrence.
+#                 concat across retrieval sources; unique_by id;
+#                 group_by brand for diversity cap; sum for facet
+#                 counts.
+#
+#   blocked: #13  Other: no string literals — intent codes, rule
+#                 kinds, brand IDs, facet names. Recurring.
+#
+#   blocked: #6   streaming / partial results — facet counts stream
+#                 to UI as the scored set materialises; Algolia ships
+#                 facet counts alongside hits in the same response
+#                 envelope but progressive UIs reveal facets first.
+#                 Third non-stress-test corpus occurrence after
+#                 flow #9 onboard activation events and flow #15
+#                 incident searcher progress.
+#
+#   blocked: #3   in-source error handling — vector-search service
+#                 down → fall back to lexical only; personalization
+#                 service slow → skip the personalisation boost.
+#                 Recovery + accumulation both apply.
+#
+#   POSITIVE     The pipeline form `| where | rank | pick using` is
+#                a PARTIAL FIT — it expresses "best single match for
+#                the featured slot" cleanly, the same shape that
+#                onboard.flow exhibits. The gap is "give me top N
+#                instead of top 1." A small language addition
+#                (a `take n` stage, or documented top-N semantics
+#                for the `top` stage) closes most of this. This is
+#                evidence on Friday that not all of #4 (loops) needs
+#                to be solved at once: even a `take` stage on the
+#                pipeline form lifts product search, RAG (#13), and
+#                interview scheduling (#11) onto solid ground.
+#
+#   shippable: N — the workflow that compiles below runs ensemble
+#                  retrieval serially, hides the score arithmetic
+#                  (so merchandisers cannot tune weights), collapses
+#                  merchandising rules into an opaque tool, and uses
+#                  an opaque tool for top-N because the pipeline
+#                  form cannot return N elements. A merchandising
+#                  team reading this Flow source cannot answer
+#                  "what does boost-margin actually do?" or "which
+#                  rules fire for which queries?"
+#
+# ----------------------------------------------------------------------
+# Compilable stub: opaque ensemble retrieval, opaque score, opaque
+# merchandising rules; pipeline form picks the featured single
+# product; opaque tool selects top-N for the grid.
+
+type SearchRequest = { query:        string,
+                     customer_id:  string,
+                     page_size:    int,
+                     region:       string }
+
+type Product       = { id:           string,
+                     title:        string,
+                     price_cents:  int,
+                     stock_count:  int,
+                     margin_bps:   int,
+                     brand:        string,
+                     category:     string,
+                     relevance:    float,
+                     score:        float }
+
+type FacetCount    = { attribute: string,
+                     value:     string,
+                     n:         int }
+
+type SearchResult  = { featured:     Product,
+                     results:      [Product],
+                     facets:       [FacetCount],
+                     total_count:  int }
+
+tool retrieve_candidates  (query:       string,
+                           customer_id: string,
+                           region:      string,
+                           limit:       int)              -> [Product]
+  effect deterministic
+tool score_and_merchandise (req:        SearchRequest,
+                            candidates: [Product])         -> [Product]
+  effect model("score-merchandise-v1")
+tool select_top_n         (scored: [Product],
+                           n:      int)                   -> [Product]
+  effect pure
+tool compute_facets       (scored: [Product])             -> [FacetCount]
+  effect pure
+
+flow search(SearchRequest) -> SearchResult {
+  # workaround: ensemble retrieval (lexical + semantic + personalized)
+  # collapses into one tool. The parallelism is invisible. #2 #7.
+  candidates = retrieve_candidates(it.query, it.customer_id, it.region,
+                                   it.page_size)
+
+  # workaround: score arithmetic + merchandising-rule fold +
+  # diversity enforcement collapse into one tool. The merchandising
+  # policy lives inside the tool's source, not the workflow. #4 #8
+  # #11 #14 #16.
+  scored = score_and_merchandise(it, candidates)
+
+  # GENUINE PARTIAL FIT: pipeline picks the "featured" single match
+  # for the slot above the grid. Where filters out out-of-stock and
+  # low-margin items; rank by score; pick top.
+  featured = scored
+           | where stock_count > 0 and margin_bps >= 100
+           | rank score desc
+           | pick using primary
+
+  # workaround: top-N for the grid cannot use the pipeline form
+  # (pick using returns ONE). A `take` stage on the pipeline would
+  # close this gap without redesigning the language.
+  top_picks = select_top_n(scored, it.page_size)
+
+  facets = compute_facets(scored)
+
+  SearchResult {
+    featured:    featured,
+    results:     top_picks,
+    facets:      facets,
+    total_count: it.page_size
+  }
+}

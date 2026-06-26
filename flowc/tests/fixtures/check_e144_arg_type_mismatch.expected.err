@@ -1,0 +1,1 @@
+tests/fixtures/check_e144_arg_type_mismatch.flow:7:19: error[E144]: argument type incompatible: expected int, got string

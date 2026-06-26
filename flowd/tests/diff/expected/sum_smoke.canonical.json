@@ -1,0 +1,78 @@
+{
+  "flows": [
+    {
+      "name": "propose",
+      "output": "Hypothesis",
+      "params": [
+        {
+          "implicit": true,
+          "name": "it",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "ir_version": "1.0",
+  "tools": [],
+  "types": [
+    {
+      "id": 1,
+      "kind": "primitive",
+      "name": "string"
+    },
+    {
+      "id": 2,
+      "kind": "primitive",
+      "name": "int"
+    },
+    {
+      "id": 3,
+      "kind": "primitive",
+      "name": "float"
+    },
+    {
+      "id": 4,
+      "kind": "primitive",
+      "name": "bool"
+    },
+    {
+      "id": 100,
+      "kind": "sum",
+      "name": "Hypothesis",
+      "variants": [
+        {
+          "fields": [
+            {
+              "name": "suspect_deploy_id",
+              "type": "string"
+            }
+          ],
+          "index": 0,
+          "name": "DeployCaused"
+        },
+        {
+          "fields": [
+            {
+              "name": "resource",
+              "type": "string"
+            }
+          ],
+          "index": 1,
+          "name": "CapacityIssue"
+        }
+      ]
+    }
+  ],
+  "variant_index": [
+    {
+      "name": "CapacityIssue",
+      "sum": "Hypothesis",
+      "variant_idx": 1
+    },
+    {
+      "name": "DeployCaused",
+      "sum": "Hypothesis",
+      "variant_idx": 0
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+tests/fixtures/check_e161_match_non_sum.flow:2:3: error[E161]: match expression's scrutinee must have sum type, found int

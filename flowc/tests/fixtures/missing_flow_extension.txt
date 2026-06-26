@@ -1,0 +1,1 @@
+# this fixture exercises the W101 warning (wrong extension)

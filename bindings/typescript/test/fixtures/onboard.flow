@@ -1,0 +1,15 @@
+type Customer = { id: string, amount: int }
+type Decision = { approved: bool, score: int }
+
+tool credit_check(id: string) -> int
+  effect deterministic
+
+tool record_decision(id: string, approved: bool) -> bool
+  effect mutation
+
+flow onboard(Customer) -> Decision {
+  score    = credit_check(it.id)
+  approved = score > 700
+  done     = record_decision(it.id, approved)
+  Decision { approved: approved, score: score }
+}

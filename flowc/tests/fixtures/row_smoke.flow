@@ -1,0 +1,9 @@
+type Item = { id: string, cost: int }
+type Doubled = { full: Item, doubled: int }
+
+tool fetch_items(uid: string) -> [Item]
+  effect deterministic
+
+flow expand(uid: string) -> [Doubled] {
+  fetch_items(uid) | select Doubled { full: row, doubled: row.cost * 2 }
+}

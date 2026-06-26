@@ -1,0 +1,63 @@
+# Build the two WASM modules and publish the playground to GitHub Pages.
+#
+# Why this works as a plain static site: the page loads its assets with
+# relative paths (flowc.js / flowd.js), the modules are built with
+# ENVIRONMENT=web,node and use no threads/SharedArrayBuffer, so no cross-origin
+# isolation (COOP/COEP) headers are required, and Pages already serves .wasm
+# with the correct application/wasm MIME type. Nothing is committed: the
+# artifacts are built fresh here and uploaded straight to Pages.
+#
+# One-time setup by the repo owner: Settings -> Pages -> Build and deployment
+# -> Source: "GitHub Actions". After that, every push to main redeploys.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a newer deploy supersede an in-flight one, but don't cancel a run
+# that is mid-deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flex + bison
+        run: sudo apt-get update && sudo apt-get install -y flex bison
+      - uses: mymindstorm/setup-emsdk@v14
+      - name: Build the two WASM modules
+        run: web/build.sh
+      - name: Smoke-test the build before publishing
+        run: node web/verify.js
+      - name: Stage the runtime files (index + the two modules)
+        run: |
+          mkdir -p _site
+          cp web/index.html \
+             web/flowc.js web/flowc.wasm \
+             web/flowd.js web/flowd.wasm \
+             _site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

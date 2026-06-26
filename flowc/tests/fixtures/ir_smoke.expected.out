@@ -1,0 +1,113 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/ir_smoke.flow",
+  "types": [
+    {
+      "name": "User",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "email", "type": "string"}
+      ]
+    },
+    {
+      "name": "Plan",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "cost", "type": "int"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "create_user",
+      "input": [
+        {"name": "email", "type": "string"}
+      ],
+      "output": "User",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "best_plan",
+      "input": [
+        {"name": "user", "type": "User"}
+      ],
+      "output": "[Plan]",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "signup",
+      "params": [
+        {"name": "it", "type": "User", "implicit": true}
+      ],
+      "output": "Plan",
+      "bindings": [
+        {
+          "name": "user",
+          "expr": {
+            "kind": "call",
+            "tool": "create_user",
+            "args": [
+              {
+                "field": "email",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "email"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "plan",
+          "expr": {
+            "kind": "pipeline",
+            "source": {
+              "kind": "call",
+              "tool": "best_plan",
+              "args": [
+                {
+                  "field": "user",
+                  "value": {
+                    "kind": "path",
+                    "segments": ["user"]
+                  }
+                }
+              ]
+            },
+            "stages": [
+              {
+                "kind": "filter",
+                "op": "where",
+                "predicate": "cost <= 100"
+              },
+              {
+                "kind": "sort",
+                "op": "rank",
+                "by": "cost",
+                "direction": "asc"
+              },
+              {
+                "kind": "terminal",
+                "op": "pick",
+                "model": "primary"
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["plan"]
+      }
+    }
+  ]
+}

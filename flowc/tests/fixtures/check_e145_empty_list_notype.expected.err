@@ -1,0 +1,1 @@
+tests/fixtures/check_e145_empty_list_notype.flow:2:8: error[E145]: empty list literal '[]' requires a type annotation or context

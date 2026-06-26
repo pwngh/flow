@@ -1,0 +1,1 @@
+tests/fixtures/resolve_unknown_type.flow:1:19: error[E123]: reference to unknown type 'WhatType'

@@ -1,0 +1,29 @@
+# triage.flow — types, a tool, an effect, and a branch.
+#
+# This shows the shape of a real Flow program:
+#   - a `type` declaration (records use `= { ... }`),
+#   - a `tool` with its mandatory `effect` clause (here a model call),
+#   - a `flow` that calls the tool and then branches on its input.
+#
+# `flowd run` registers a deterministic stub for `risk_check` (so you can
+# run the program with no host code) and evaluates the `if/else` for real.
+# The written trace will contain a model_call node for the tool.
+#
+#   flowc triage.flow -o triage.ir.json
+#   flowd run triage.ir.json --input 750     # -> tier 2, plus a trace
+#
+# Tip: inspect the pipeline at any stage, e.g.
+#   flowc --dump=checked triage.flow
+
+type RiskReport = { score: int, flagged: bool }
+
+tool risk_check(amount: int) -> RiskReport
+  effect model("risk-v1")
+
+flow triage(int) -> int {
+  report = risk_check(it)
+  tier   = if it > 1000 then 3
+           else if it > 100 then 2
+           else 1
+  tier
+}

@@ -1,0 +1,1 @@
+tests/fixtures/malformed.ir.json: error[R150]: top-level 'types', 'tools', and 'flows' must all be arrays

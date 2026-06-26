@@ -1,0 +1,212 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/bulk_import_validator.flow",
+  "types": [
+    {
+      "name": "ImportRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "source_id", "type": "string"},
+        {"name": "target_table", "type": "string"},
+        {"name": "mode", "type": "string"}
+      ]
+    },
+    {
+      "name": "ParsedRow",
+      "kind": "record",
+      "fields": [
+        {"name": "row_index", "type": "int"},
+        {"name": "values", "type": "[string]"}
+      ]
+    },
+    {
+      "name": "ValidationError",
+      "kind": "record",
+      "fields": [
+        {"name": "row_index", "type": "int"},
+        {"name": "column", "type": "string"},
+        {"name": "code", "type": "string"},
+        {"name": "message", "type": "string"}
+      ]
+    },
+    {
+      "name": "ValidationReport",
+      "kind": "record",
+      "fields": [
+        {"name": "valid_rows", "type": "[ParsedRow]"},
+        {"name": "errors", "type": "[ValidationError]"},
+        {"name": "total", "type": "int"},
+        {"name": "valid_count", "type": "int"},
+        {"name": "invalid_count", "type": "int"}
+      ]
+    },
+    {
+      "name": "InsertResult",
+      "kind": "record",
+      "fields": [
+        {"name": "inserted", "type": "int"},
+        {"name": "db_errors", "type": "[ValidationError]"}
+      ]
+    },
+    {
+      "name": "ImportSummary",
+      "kind": "record",
+      "fields": [
+        {"name": "total", "type": "int"},
+        {"name": "imported", "type": "int"},
+        {"name": "failed", "type": "int"},
+        {"name": "errors", "type": "[ValidationError]"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "parse_source",
+      "input": [
+        {"name": "source_id", "type": "string"}
+      ],
+      "output": "[ParsedRow]",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "validate_rows",
+      "input": [
+        {"name": "rows", "type": "[ParsedRow]"},
+        {"name": "target_table", "type": "string"},
+        {"name": "mode", "type": "string"}
+      ],
+      "output": "ValidationReport",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "insert_rows",
+      "input": [
+        {"name": "rows", "type": "[ParsedRow]"},
+        {"name": "target_table", "type": "string"}
+      ],
+      "output": "InsertResult",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "import",
+      "params": [
+        {"name": "it", "type": "ImportRequest", "implicit": true}
+      ],
+      "output": "ImportSummary",
+      "bindings": [
+        {
+          "name": "rows",
+          "expr": {
+            "kind": "call",
+            "tool": "parse_source",
+            "args": [
+              {
+                "field": "source_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "source_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "report",
+          "expr": {
+            "kind": "call",
+            "tool": "validate_rows",
+            "args": [
+              {
+                "field": "rows",
+                "value": {
+                  "kind": "path",
+                  "segments": ["rows"]
+                }
+              },
+              {
+                "field": "target_table",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "target_table"]
+                }
+              },
+              {
+                "field": "mode",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "mode"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "inserts",
+          "expr": {
+            "kind": "call",
+            "tool": "insert_rows",
+            "args": [
+              {
+                "field": "rows",
+                "value": {
+                  "kind": "path",
+                  "segments": ["report", "valid_rows"]
+                }
+              },
+              {
+                "field": "target_table",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "target_table"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "construct",
+        "type": "ImportSummary",
+        "fields": [
+          {
+            "name": "total",
+            "value": {
+              "kind": "path",
+              "segments": ["report", "total"]
+            }
+          },
+          {
+            "name": "imported",
+            "value": {
+              "kind": "path",
+              "segments": ["inserts", "inserted"]
+            }
+          },
+          {
+            "name": "failed",
+            "value": {
+              "kind": "path",
+              "segments": ["report", "invalid_count"]
+            }
+          },
+          {
+            "name": "errors",
+            "value": {
+              "kind": "path",
+              "segments": ["report", "errors"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

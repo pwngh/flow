@@ -1,0 +1,4 @@
+flow chain(a: int, b: int, c: int) -> bool {
+  ok = a < b < c
+  ok
+}

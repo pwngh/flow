@@ -1,0 +1,146 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/onboard.flow",
+  "types": [
+    {
+      "name": "SignupRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "email", "type": "string"}
+      ]
+    },
+    {
+      "name": "User",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "email", "type": "string"}
+      ]
+    },
+    {
+      "name": "Plan",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "cost", "type": "int"},
+        {"name": "expected_value", "type": "int"},
+        {"name": "success_rate", "type": "float"}
+      ]
+    },
+    {
+      "name": "OnboardResult",
+      "kind": "record",
+      "fields": [
+        {"name": "user", "type": "User"},
+        {"name": "plan", "type": "Plan"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "create_user",
+      "input": [
+        {"name": "email", "type": "string"}
+      ],
+      "output": "User",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "propose_plans",
+      "input": [
+        {"name": "user", "type": "User"}
+      ],
+      "output": "[Plan]",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "onboard",
+      "params": [
+        {"name": "it", "type": "SignupRequest", "implicit": true}
+      ],
+      "output": "OnboardResult",
+      "bindings": [
+        {
+          "name": "user",
+          "expr": {
+            "kind": "call",
+            "tool": "create_user",
+            "args": [
+              {
+                "field": "email",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "email"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "plan",
+          "expr": {
+            "kind": "pipeline",
+            "source": {
+              "kind": "call",
+              "tool": "propose_plans",
+              "args": [
+                {
+                  "field": "user",
+                  "value": {
+                    "kind": "path",
+                    "segments": ["user"]
+                  }
+                }
+              ]
+            },
+            "stages": [
+              {
+                "kind": "filter",
+                "op": "where",
+                "predicate": "cost <= 100 and success_rate >= 0.9"
+              },
+              {
+                "kind": "sort",
+                "op": "rank",
+                "by": "expected_value",
+                "direction": "desc"
+              },
+              {
+                "kind": "terminal",
+                "op": "pick",
+                "model": "primary"
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "construct",
+        "type": "OnboardResult",
+        "fields": [
+          {
+            "name": "user",
+            "value": {
+              "kind": "path",
+              "segments": ["user"]
+            }
+          },
+          {
+            "name": "plan",
+            "value": {
+              "kind": "path",
+              "segments": ["plan"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

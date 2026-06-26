@@ -1,0 +1,1 @@
+tests/fixtures/check_e140_field_suggestion.flow:8:5: error[E140]: no field 'cst' on type 'R'; did you mean 'cost'?

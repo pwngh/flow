@@ -1,0 +1,21 @@
+ir_version: 1.0
+types:
+  [1] string (primitive)
+  [2] int (primitive)
+  [3] float (primitive)
+  [4] bool (primitive)
+  [100] SignupRequest (record)
+    email: string
+  [101] User (record)
+    email: string
+    id: string
+tools:
+  create_user
+    effect: deterministic
+    input: email:string
+    output: User
+flows:
+  onboard
+    params: it:SignupRequest (implicit)
+    output: User
+variant_index:

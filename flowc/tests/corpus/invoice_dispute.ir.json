@@ -1,0 +1,364 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/invoice_dispute.flow",
+  "types": [
+    {
+      "name": "DisputeNotification",
+      "kind": "record",
+      "fields": [
+        {"name": "dispute_id", "type": "string"},
+        {"name": "payment_intent_id", "type": "string"},
+        {"name": "reason_code", "type": "string"},
+        {"name": "category", "type": "string"},
+        {"name": "amount", "type": "int"},
+        {"name": "evidence_due_by", "type": "int"}
+      ]
+    },
+    {
+      "name": "Invoice",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "customer_id", "type": "string"},
+        {"name": "product_id", "type": "string"},
+        {"name": "amount", "type": "int"},
+        {"name": "captured_at", "type": "int"}
+      ]
+    },
+    {
+      "name": "CustomerHistory",
+      "kind": "record",
+      "fields": [
+        {"name": "customer_id", "type": "string"},
+        {"name": "prior_disputes", "type": "int"},
+        {"name": "lifetime_value", "type": "int"},
+        {"name": "account_age_days", "type": "int"}
+      ]
+    },
+    {
+      "name": "Policy",
+      "kind": "record",
+      "fields": [
+        {"name": "product_id", "type": "string"},
+        {"name": "refund_terms", "type": "string"},
+        {"name": "sla_text", "type": "string"}
+      ]
+    },
+    {
+      "name": "DisputeStrategy",
+      "kind": "record",
+      "fields": [
+        {"name": "kind", "type": "string"},
+        {"name": "confidence", "type": "float"},
+        {"name": "requires_human_review", "type": "bool"},
+        {"name": "rationale", "type": "string"}
+      ]
+    },
+    {
+      "name": "EvidencePacket",
+      "kind": "record",
+      "fields": [
+        {"name": "category", "type": "string"},
+        {"name": "shipping_receipt", "type": "string"},
+        {"name": "tracking_number", "type": "string"},
+        {"name": "delivery_signature", "type": "string"},
+        {"name": "customer_communication", "type": "string"},
+        {"name": "refund_policy_text", "type": "string"},
+        {"name": "service_documentation", "type": "string"},
+        {"name": "billing_address_match", "type": "bool"},
+        {"name": "ip_country_match", "type": "bool"},
+        {"name": "three_ds_authenticated", "type": "bool"},
+        {"name": "strength", "type": "float"}
+      ]
+    },
+    {
+      "name": "SubmissionResult",
+      "kind": "record",
+      "fields": [
+        {"name": "submitted", "type": "bool"},
+        {"name": "evidence_id", "type": "string"},
+        {"name": "submitted_at", "type": "int"}
+      ]
+    },
+    {
+      "name": "DisputeResponse",
+      "kind": "record",
+      "fields": [
+        {"name": "strategy", "type": "string"},
+        {"name": "submitted", "type": "bool"},
+        {"name": "evidence_id", "type": "string"},
+        {"name": "expected_outcome_by", "type": "int"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "lookup_invoice",
+      "input": [
+        {"name": "payment_intent_id", "type": "string"}
+      ],
+      "output": "Invoice",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "get_customer_history",
+      "input": [
+        {"name": "customer_id", "type": "string"}
+      ],
+      "output": "CustomerHistory",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "get_applicable_policy",
+      "input": [
+        {"name": "product_id", "type": "string"}
+      ],
+      "output": "Policy",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "decide_dispute_strategy",
+      "input": [
+        {"name": "notification", "type": "DisputeNotification"},
+        {"name": "invoice", "type": "Invoice"},
+        {"name": "customer", "type": "CustomerHistory"},
+        {"name": "policy", "type": "Policy"}
+      ],
+      "output": "DisputeStrategy",
+      "effect": {
+        "level": "model",
+        "model": "dispute-strategy-v1"
+      }
+    },
+    {
+      "name": "assemble_evidence",
+      "input": [
+        {"name": "notification", "type": "DisputeNotification"},
+        {"name": "invoice", "type": "Invoice"},
+        {"name": "customer", "type": "CustomerHistory"},
+        {"name": "strategy", "type": "string"}
+      ],
+      "output": "EvidencePacket",
+      "effect": {
+        "level": "model",
+        "model": "evidence-assembly-v1"
+      }
+    },
+    {
+      "name": "submit_dispute_response",
+      "input": [
+        {"name": "dispute_id", "type": "string"},
+        {"name": "strategy", "type": "string"},
+        {"name": "evidence", "type": "EvidencePacket"}
+      ],
+      "output": "SubmissionResult",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "handle_dispute",
+      "params": [
+        {"name": "it", "type": "DisputeNotification", "implicit": true}
+      ],
+      "output": "DisputeResponse",
+      "bindings": [
+        {
+          "name": "invoice",
+          "expr": {
+            "kind": "call",
+            "tool": "lookup_invoice",
+            "args": [
+              {
+                "field": "payment_intent_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "payment_intent_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "customer",
+          "expr": {
+            "kind": "call",
+            "tool": "get_customer_history",
+            "args": [
+              {
+                "field": "customer_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["invoice", "customer_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "policy",
+          "expr": {
+            "kind": "call",
+            "tool": "get_applicable_policy",
+            "args": [
+              {
+                "field": "product_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["invoice", "product_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "strategy",
+          "expr": {
+            "kind": "call",
+            "tool": "decide_dispute_strategy",
+            "args": [
+              {
+                "field": "notification",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "invoice",
+                "value": {
+                  "kind": "path",
+                  "segments": ["invoice"]
+                }
+              },
+              {
+                "field": "customer",
+                "value": {
+                  "kind": "path",
+                  "segments": ["customer"]
+                }
+              },
+              {
+                "field": "policy",
+                "value": {
+                  "kind": "path",
+                  "segments": ["policy"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "evidence",
+          "expr": {
+            "kind": "call",
+            "tool": "assemble_evidence",
+            "args": [
+              {
+                "field": "notification",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "invoice",
+                "value": {
+                  "kind": "path",
+                  "segments": ["invoice"]
+                }
+              },
+              {
+                "field": "customer",
+                "value": {
+                  "kind": "path",
+                  "segments": ["customer"]
+                }
+              },
+              {
+                "field": "strategy",
+                "value": {
+                  "kind": "path",
+                  "segments": ["strategy", "kind"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "submission",
+          "expr": {
+            "kind": "call",
+            "tool": "submit_dispute_response",
+            "args": [
+              {
+                "field": "dispute_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "dispute_id"]
+                }
+              },
+              {
+                "field": "strategy",
+                "value": {
+                  "kind": "path",
+                  "segments": ["strategy", "kind"]
+                }
+              },
+              {
+                "field": "evidence",
+                "value": {
+                  "kind": "path",
+                  "segments": ["evidence"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "construct",
+        "type": "DisputeResponse",
+        "fields": [
+          {
+            "name": "strategy",
+            "value": {
+              "kind": "path",
+              "segments": ["strategy", "kind"]
+            }
+          },
+          {
+            "name": "submitted",
+            "value": {
+              "kind": "path",
+              "segments": ["submission", "submitted"]
+            }
+          },
+          {
+            "name": "evidence_id",
+            "value": {
+              "kind": "path",
+              "segments": ["submission", "evidence_id"]
+            }
+          },
+          {
+            "name": "expected_outcome_by",
+            "value": {
+              "kind": "path",
+              "segments": ["it", "evidence_due_by"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,151 @@
+.TH FLOW-PROVENANCE 7 "May 2026" "" "Flow Manual"
+.SH NAME
+flow-provenance \- decision provenance and the trace artifact
+.SH DESCRIPTION
+Decision provenance is the recorded chain of evidence \(em
+inputs, intermediate values, model identities, outputs \(em that
+lets a third party reconstruct
+.I why
+an automated decision came out the way it did.  Flow is
+infrastructure for decision provenance: the runtime writes a
+complete trace of every execution to disk, and supports
+.B model-versioned replay :
+re-executing a recorded decision against a different model with
+the originally captured inputs, writing a fresh trace whose nodes
+each carry a
+.I replay_of
+cross-reference back to the original, so the two traces can be
+compared node-for-node.
+.PP
+Provenance and orchestration are different categories that share
+technology.  Orchestration frameworks run pipelines; Flow records
+evidence.  The pipeline-orchestration substrate is present here
+but secondary to the recording machinery.
+.SH THE CHAIN OF EVIDENCE
+Every node in a Flow execution writes a record to the trace:
+.IP \(bu 2
+its inputs (inline JSON or content-addressed hashes),
+.IP \(bu 2
+its output (same),
+.IP \(bu 2
+the timing (started_at, ended_at),
+.IP \(bu 2
+any errors recorded for the node,
+.IP \(bu 2
+the effect level the IR declared for it (which governs replay
+behavior),
+.IP \(bu 2
+for model calls: the provider, the model name, and the model
+version (the call's inputs and output are recorded as the node's
+invocations, inline or content-addressed like any other node).
+.PP
+The trace's integrity is the audit artifact.  Inputs and outputs
+are hashed; the trace records the hashes; the values themselves
+live in a content-addressed store that can be pruned, encrypted,
+redacted, or geographically partitioned independently of the
+trace structure.
+.SH REPLAY AND RESUME
+The effect level the IR records for each node governs what replay
+does with it:
+.IP \(bu 2
+.B pure
+and
+.B deterministic
+nodes are restored from the recorded trace \(em their outputs are
+reproducible, so re-running them would only waste work;
+.IP \(bu 2
+.B mutation
+nodes are
+.I never
+re-invoked \(em replay must not repeat an external side effect, so
+the recorded output stands in for the call;
+.IP \(bu 2
+.B model
+nodes are re-invoked only on a model-versioned replay (a new model
+id supplied to
+.BR flowd_replay );
+otherwise the recorded output is restored like any other.
+.PP
+Every node a replay or resume writes carries a
+.I replay_of
+cross-reference \(em the original trace dir, the original node id,
+and a
+.I mode
+of
+.B restored_from_trace
+(the output came from the recorded trace) or
+.B re_invoked
+(the node was executed again).  A reviewer can therefore tell, node
+by node, what was reproduced versus recomputed.
+.PP
+.B Resume
+continues a run that suspended at an
+.B await_human_approval
+node.  It writes a new trace \(em a sibling of the original under the
+same
+.IR <traces>/<flow>/ \ parent,
+its execution id tagged
+.B _resumed
+\(em whose manifest records a
+.I resumed_from
+pointer to the suspended trace.  Nodes recorded before the
+suspension are restored, the suspended node takes the host's
+injected decision, and nodes after it run live.
+.PP
+.B Integrity guard.
+Before a replay or resume restores a node's recorded output, the
+runtime confirms the input it just re-derived matches the input the
+original recorded for that node.  If an IR or upstream change made
+the node receive a different input, restoring the stale output would
+silently corrupt the reconstruction, so the run fails with
+.B R157
+instead.  Replays and resumes are thus byte-faithful or they stop;
+they never quietly diverge.
+.SH AUDIENCES AND USE CASES
+.TP
+.B Pre-launch policy review.
+Compliance reviews the
+.I .flow
+source file directly.  The flow
+.I is
+the policy: which tools are consulted, what thresholds gate the
+decision, what the fallback path is.  No engineering mediation
+required.
+.TP
+.B Auditing contested decisions.
+When a customer disputes a decision, the reviewer opens that
+execution's trace and reads it end-to-end.  Every input, every
+intermediate value, every model invocation, every output is
+recorded.
+.TP
+.B Certifying model upgrades.
+When a model is upgraded, compliance replays last quarter's
+decisions through the new model, quantifies the diff, documents
+the changes, and attaches the diff to the change-management
+record.  Model-versioned replay is the mechanism.
+.TP
+.B Responding to subpoenas.
+Legal requests for the reasoning behind a specific past decision
+require evidence that is admissible.  The trace is the evidence:
+the original execution is preserved verbatim, cryptographically
+hashed, and replayable on demand.
+.SH WHAT PROVENANCE IS NOT
+.TP
+.B Ongoing decision-quality monitoring.
+Tracking rejection rates, decision distributions, or model
+confidence over time is operational observability, not
+provenance.  The runtime does not ship a metrics endpoint;
+per-call token and cost counts are surfaced only when a model
+provider adapter reports them, and aggregating, dashboarding, or
+alerting on them is the host's observability stack.
+.TP
+.B Predictive what-if analysis.
+"What would happen if we lowered the threshold from 0.5 to 0.4?"
+is simulation, not replay.  The runtime replays recorded
+executions; it does not ship a simulation substrate, and
+predictive what-if analysis is a downstream concern.
+.TP
+.B General agent orchestration.
+Flow is not a distributed-systems platform, not a general-purpose
+programming language, not a model-training or inference platform.
+Those are downstream concerns.

@@ -1,0 +1,17 @@
+cJSON 1.7.18
+============
+
+Source:  https://github.com/DaveGamble/cJSON/releases/tag/v1.7.18
+Files:   cJSON.h, cJSON.c, LICENSE
+License: MIT (see LICENSE in this directory)
+
+This is the only third-party source vendored into flowd. It is compiled
+with relaxed warning flags via the `GEN_CFLAGS` rule in Makefile because
+the upstream code triggers -Wpedantic warnings that are not ours to fix.
+
+To upgrade, replace cJSON.h and cJSON.c with the matching files from a
+new release tag and update this file. The 1.7.x line is stable; do not
+move to a different major without confirming the API surface flowd uses
+(cJSON_Parse, cJSON_GetObjectItemCaseSensitive, cJSON_GetArrayItem,
+cJSON_GetArraySize, cJSON_IsString/Number/Object/Array/Bool/Null,
+cJSON_GetStringValue, cJSON_Delete) is preserved.

@@ -1,0 +1,214 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/interview_scheduler.flow",
+  "types": [
+    {
+      "name": "ScheduleRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "candidate_email", "type": "string"},
+        {"name": "candidate_tz", "type": "string"},
+        {"name": "duration_min", "type": "int"},
+        {"name": "window_start", "type": "int"},
+        {"name": "window_end", "type": "int"},
+        {"name": "interviewer_ids", "type": "[string]"},
+        {"name": "interview_kind", "type": "string"},
+        {"name": "mode", "type": "string"}
+      ]
+    },
+    {
+      "name": "TimeSlot",
+      "kind": "record",
+      "fields": [
+        {"name": "start", "type": "int"},
+        {"name": "end", "type": "int"},
+        {"name": "score", "type": "float"},
+        {"name": "assigned_hosts", "type": "[string]"}
+      ]
+    },
+    {
+      "name": "Invite",
+      "kind": "record",
+      "fields": [
+        {"name": "invitee_email", "type": "string"},
+        {"name": "calendar_event_id", "type": "string"},
+        {"name": "send_status", "type": "string"}
+      ]
+    },
+    {
+      "name": "ScheduleResult",
+      "kind": "record",
+      "fields": [
+        {"name": "slot", "type": "TimeSlot"},
+        {"name": "candidate_invite", "type": "Invite"},
+        {"name": "interviewer_invites", "type": "[Invite]"},
+        {"name": "outcome", "type": "string"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "find_mutual_slots",
+      "input": [
+        {"name": "interviewer_ids", "type": "[string]"},
+        {"name": "window_start", "type": "int"},
+        {"name": "window_end", "type": "int"},
+        {"name": "duration_min", "type": "int"},
+        {"name": "candidate_tz", "type": "string"},
+        {"name": "mode", "type": "string"}
+      ],
+      "output": "[TimeSlot]",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "send_invites",
+      "input": [
+        {"name": "slot", "type": "TimeSlot"},
+        {"name": "candidate_email", "type": "string"},
+        {"name": "candidate_tz", "type": "string"},
+        {"name": "interviewer_ids", "type": "[string]"},
+        {"name": "kind", "type": "string"}
+      ],
+      "output": "ScheduleResult",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "schedule",
+      "params": [
+        {"name": "it", "type": "ScheduleRequest", "implicit": true}
+      ],
+      "output": "ScheduleResult",
+      "bindings": [
+        {
+          "name": "candidates",
+          "expr": {
+            "kind": "call",
+            "tool": "find_mutual_slots",
+            "args": [
+              {
+                "field": "interviewer_ids",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "interviewer_ids"]
+                }
+              },
+              {
+                "field": "window_start",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "window_start"]
+                }
+              },
+              {
+                "field": "window_end",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "window_end"]
+                }
+              },
+              {
+                "field": "duration_min",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "duration_min"]
+                }
+              },
+              {
+                "field": "candidate_tz",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "candidate_tz"]
+                }
+              },
+              {
+                "field": "mode",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "mode"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "best",
+          "expr": {
+            "kind": "pipeline",
+            "source": {
+              "kind": "path",
+              "segments": ["candidates"]
+            },
+            "stages": [
+              {
+                "kind": "sort",
+                "op": "rank",
+                "by": "score",
+                "direction": "desc"
+              },
+              {
+                "kind": "terminal",
+                "op": "pick",
+                "model": "primary"
+              }
+            ]
+          }
+        },
+        {
+          "name": "result",
+          "expr": {
+            "kind": "call",
+            "tool": "send_invites",
+            "args": [
+              {
+                "field": "slot",
+                "value": {
+                  "kind": "path",
+                  "segments": ["best"]
+                }
+              },
+              {
+                "field": "candidate_email",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "candidate_email"]
+                }
+              },
+              {
+                "field": "candidate_tz",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "candidate_tz"]
+                }
+              },
+              {
+                "field": "interviewer_ids",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "interviewer_ids"]
+                }
+              },
+              {
+                "field": "kind",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "interview_kind"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["result"]
+      }
+    }
+  ]
+}

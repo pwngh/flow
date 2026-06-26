@@ -1,0 +1,294 @@
+# onboard_by_tier.flow — corpus flow #9 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Notion's first-run flow (personal-vs-team branch at
+# signup, role survey driving workspace personalisation, optional
+# import step for high-intent signups). Linear's onboarding (workspace
+# name, GitHub/GitLab integration, team creation, invite teammates;
+# Standard plan unlocks integrations & private teams, Business unlocks
+# more, Enterprise adds SSO/SCIM). Cross-referenced with SaaS-
+# activation literature on behavioural triggers and resumable progress.
+#
+# An onboard-by-tier flow has this shape — and it is a state machine
+# that lives across many sessions, not a single straight-through run:
+#
+#   tier-aware plan   pick the step set for this tier:
+#     free / personal       → workspace + getting-started + 1 template
+#                             + optional teammate invite
+#     team / basic          → all of above + GitHub integration +
+#                             create-team + invite-teammates (required)
+#                             + role survey driving template suggestions
+#     business              → all of above + private-team setup +
+#                             admin-dashboard tour + permission config +
+#                             optional SSO setup
+#     enterprise            → all of above + SAML/SCIM + custom domain +
+#                             dedicated CSM intro + implementation-
+#                             manager assignment
+#
+#   per-step branch   some steps are role-conditional:
+#                     GitHub integration only for engineering roles
+#                     Slack integration only if user opted in
+#
+#   per-step state    persist completion per step
+#                     allow skip-for-now on optional steps
+#                     allow resume from any incomplete step
+#
+#   across sessions   user closes tab → returns 3 days later → flow
+#                     resumes at the next incomplete step
+#                     abandoned-flow nudge emails fire on behavioural
+#                     triggers ("has not completed integration step
+#                     and trial expires in 4 days")
+#
+#   activation        emit progress events as steps complete
+#                     declare "activated" once the activation criterion
+#                     is met (e.g., 3+ steps + 1 teammate invited)
+#
+# Three load-bearing facts:
+#
+#   (a) Each step is its own small flow with its own validation,
+#       integration calls, error handling. Production onboarding stacks
+#       compose them, not inline them. Sub-flow composition is not
+#       optional here — it is how onboarding teams ship.
+#
+#   (b) The flow is not "run once and finish." It is a long-running
+#       state machine: each invocation reads stored state, advances by
+#       at most one step, writes new state, returns. Days or weeks may
+#       pass between invocations. The runtime model the language has
+#       (one invocation, returns one result) does not match.
+#
+#   (c) Every step that runs for a tier that doesn't need it is wasted
+#       work. SSO setup attempts for free users hit OAuth endpoints
+#       that will never be configured; CSM-intro emails to free users
+#       are spam. The cost is small per user but the *correctness* is
+#       not — sending an enterprise CSM intro to a free user is a real
+#       bug that lazy / short-circuit evaluation would prevent.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow onboard(OnboardingRequest) -> OnboardingState {
+#     user  = get_user(it.user_id)
+#     state = load_state(it.user_id)         # may be empty on first run
+#
+#     # tier-driven step list:
+#     steps =
+#       if it.tier == "free":
+#         ["workspace_setup", "getting_started", "template_pick"]
+#       else if it.tier == "team":
+#         ["workspace_setup", "role_survey", "github_integration",
+#          "create_team", "invite_teammates"]
+#       else if it.tier == "business":
+#         ["workspace_setup", "role_survey", "github_integration",
+#          "create_team", "invite_teammates", "private_team_setup",
+#          "admin_dashboard_tour", "sso_setup?"]
+#       else: # enterprise
+#         ["workspace_setup", "role_survey", "github_integration",
+#          "create_team", "invite_teammates", "private_team_setup",
+#          "admin_dashboard_tour", "sso_setup", "saml_scim_config",
+#          "custom_domain", "csm_intro", "implementation_manager"]
+#
+#     # advance one step:
+#     next_id = first_incomplete(steps, state.completed)
+#     if next_id == "":
+#       return state with { status: "activated" }
+#
+#     # invoke the step's sub-flow:
+#     result = call_step_flow(next_id, user, state)   # sub-flow per step
+#
+#     # error handling: integration failures don't abort onboarding
+#     new_state =
+#       if result.failed:
+#         state with { last_error: result.error,
+#                      retry_at: now() + 1.day }
+#       else:
+#         state with { completed: append(state.completed, next_id) }
+#
+#     # behavioural-trigger registration for the *next* incomplete step
+#     # (fires on a separate schedule):
+#     if next_incomplete_after(steps, new_state.completed) != "":
+#       schedule_nudge_email(user, new_state, after: 3.days)
+#
+#     emit_activation_event(user, new_state)
+#     save_state(user, new_state)
+#     new_state
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — the tier dispatch is 4-way
+#                 (free / team / business / enterprise) and each branch
+#                 produces a different *list* of steps to take. Plus
+#                 per-step branching on role (GitHub only for
+#                 engineering, Slack only if opted in). The whole
+#                 "plan" stage IS branching, and the "advance" stage is
+#                 also branching.
+#
+#   blocked: #5   conditional binding — every step is tier-conditional.
+#                 Today every step runs on every tier, and each step's
+#                 tool internally decides whether to no-op. That moves
+#                 the policy from the workflow into the integration
+#                 tools, where it cannot be audited.
+#
+#   blocked: #7   sub-flow composition — each step (workspace_setup,
+#                 github_integration, sso_setup, saml_scim_config, …)
+#                 is a small flow in production: its own pre-checks,
+#                 its own integration call, its own error semantics,
+#                 its own success criteria. Tier dispatch is fundament-
+#                 ally "pick which sub-flows to invoke." Without #7
+#                 the workflow author either inlines everything into
+#                 one mega-tool (loses modularity, audit) or duplicates
+#                 logic across copy-pasted variants. Both are bad.
+#
+#   blocked: #10  optional types — SSO config absent on free/team
+#                 tiers; CSM assignment absent on free/team/business;
+#                 SAML/SCIM config absent below enterprise; custom
+#                 domain absent below enterprise; integration status
+#                 absent for non-engineering roles.
+#
+#   blocked: #12  time / scheduling — three sub-shapes surface:
+#
+#                 12b PAUSE-AND-RESUME across sessions. The flow is
+#                     not one invocation; it is a sequence of
+#                     invocations strung together by external state.
+#                     Days or weeks between invocations. Second
+#                     occurrence (after flow #8 preview-confirm), but
+#                     a much stronger form — flow #8's pause was
+#                     minutes, this one is weeks.
+#
+#                 12c SCHEDULED FUTURE TRIGGER. Behavioural-nudge
+#                     emails fire "3 days after last activity if step
+#                     X still incomplete." Same shape as the trial-
+#                     end reminder from flow #1, made concrete here.
+#
+#                 12d ACTIVATION EVENTS — a side-channel emit on
+#                     progress. Distinct from streaming partial
+#                     results (#6) because the event is metric-shaped
+#                     not value-shaped. May not warrant its own slot;
+#                     fold into 12c if it does not recur.
+#
+#   blocked: #14  (PROMOTED at flow #7) lazy / short-circuit
+#                 evaluation. Fourth occurrence: flow #3 moderation,
+#                 flow #6 fraud, flow #7 support, flow #9 onboard.
+#                 Here the cost is small per call but the *correctness*
+#                 cost is real: an enterprise CSM intro email to a free
+#                 user is a bug, not a wasted call. The slot is now
+#                 fully justified.
+#
+#   blocked: #13  Other: list-literal construction. Third occurrence
+#                 (flow #5 loan, flow #4 research, now flow #9). Each
+#                 tier branch produces a 3–12-element step list built
+#                 from named-step constants. Without list literals the
+#                 author cannot write "the steps for the team tier
+#                 are these and these and these"; instead a tool
+#                 returns the list opaquely. PROMOTE to slot #15
+#                 before Friday — three distinct occurrences clears
+#                 the bar set by the rubric.
+#
+#   blocked: #13  Other: no string literals — tier names, step IDs,
+#                 role names. Recurring; well-known pile.
+#
+#   blocked: #3   in-source error handling — integration failures
+#                 (GitHub OAuth declined, SCIM provisioning errors,
+#                 mail-send failures) routinely surface mid-onboarding.
+#                 Production behaviour: mark the step failed, surface
+#                 retry option, continue to next step. R101 aborts.
+#                 Accumulation form (cf. flow #8) also lurks here:
+#                 collect all per-step failures into state.errors.
+#
+#   blocked: #6   streaming / partial results — progress events should
+#                 stream to the UI as steps complete. The activation
+#                 event channel is the production signal pipeline.
+#                 First major occurrence outside the dedicated stress
+#                 test flow #20.
+#
+#   shippable: N — what compiles below runs every per-step tool on
+#                  every tier, including SSO setup for free users.
+#                  The per-step tools internally no-op for wrong
+#                  tiers, which means the policy "free users do not
+#                  get SSO" lives inside `setup_sso`, not inside the
+#                  workflow. An auditor reading this Flow source
+#                  would not be able to tell which steps run for
+#                  which tier; the workflow is illegible. For a
+#                  growth team running 100s of A/B experiments on
+#                  onboarding step sequences, this is structurally
+#                  un-shippable.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: every step runs on every tier; per-step tools
+# internally check tier and no-op when they shouldn't run; init_state
+# rolls up the results.
+
+type OnboardingRequest = { user_id:    string,
+                         tier:       string,
+                         session_id: string }
+
+type User              = { id:           string,
+                         email:        string,
+                         name:         string,
+                         role:         string,
+                         company_size: int }
+
+type Workspace         = { id:   string,
+                         name: string }
+
+type IntegrationStatus = { connected: bool,
+                         provider:  string,
+                         skipped:   bool }
+
+type SsoConfig         = { configured: bool,
+                         idp_url:    string,
+                         skipped:    bool }
+
+type CsmAssignment     = { assigned:  bool,
+                         csm_email: string,
+                         skipped:   bool }
+
+type OnboardingState   = { user_id:         string,
+                         tier:            string,
+                         status:          string,
+                         completed_steps: [string],
+                         next_step_id:    string,
+                         last_error:      string }
+
+tool get_user                  (user_id: string)            -> User
+  effect deterministic
+tool create_workspace          (user: User,
+                                tier: string)               -> Workspace
+  effect mutation
+tool setup_github_integration  (user: User)                 -> IntegrationStatus
+  effect mutation
+tool setup_sso                 (user: User,
+                                tier: string)               -> SsoConfig
+  effect mutation
+tool assign_csm                (user: User,
+                                tier: string)               -> CsmAssignment
+  effect mutation
+tool init_state                (user:      User,
+                                tier:      string,
+                                workspace: Workspace,
+                                gh:        IntegrationStatus,
+                                sso:       SsoConfig,
+                                csm:       CsmAssignment)   -> OnboardingState
+  effect mutation
+
+flow onboard(OnboardingRequest) -> OnboardingState {
+  user = get_user(it.user_id)
+
+  # awkward: every step runs on every tier. The policy "free users do
+  # not get SSO" lives inside setup_sso, not in the workflow source.
+  # Counts toward #5 conditional binding AND #14 lazy/short-circuit.
+  workspace = create_workspace(user, it.tier)
+  github    = setup_github_integration(user)
+  sso       = setup_sso(user, it.tier)
+  csm       = assign_csm(user, it.tier)
+
+  # workaround: tier-aware step-list construction + step state machine
+  # + activation criterion + nudge-email scheduling + per-step error
+  # accumulation all collapse into one init_state tool. The auditor
+  # reading this code cannot answer "what does onboarding do for an
+  # enterprise customer that it does not do for a free one."
+  state = init_state(user, it.tier, workspace, github, sso, csm)
+
+  state
+}

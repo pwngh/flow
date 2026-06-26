@@ -1,0 +1,8 @@
+type Hypothesis =
+  | DeployCaused { suspect_deploy_id: string }
+  | CapacityIssue { resource: string }
+
+flow f(string) -> bool {
+  h = DeployCaused { suspect_deploy_id: it }
+  h == h
+}

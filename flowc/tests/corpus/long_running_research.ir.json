@@ -1,0 +1,152 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/long_running_research.flow",
+  "types": [
+    {
+      "name": "ResearchRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "session_id", "type": "string"},
+        {"name": "query", "type": "string"},
+        {"name": "budget_seconds", "type": "int"},
+        {"name": "cost_limit_cents", "type": "int"},
+        {"name": "max_subtasks", "type": "int"}
+      ]
+    },
+    {
+      "name": "SubTask",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "kind", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "result_text", "type": "string"},
+        {"name": "started_at", "type": "int"},
+        {"name": "completed_at", "type": "int"},
+        {"name": "cost_cents", "type": "int"},
+        {"name": "error", "type": "string"},
+        {"name": "retries", "type": "int"}
+      ]
+    },
+    {
+      "name": "ResearchOutcome",
+      "kind": "record",
+      "fields": [
+        {"name": "session_id", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "completed_count", "type": "int"},
+        {"name": "total_count", "type": "int"},
+        {"name": "partial_summary", "type": "string"},
+        {"name": "final_summary", "type": "string"},
+        {"name": "budget_used_seconds", "type": "int"},
+        {"name": "cost_used_cents", "type": "int"},
+        {"name": "last_checkpoint_id", "type": "string"},
+        {"name": "failed_subtasks", "type": "[string]"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "plan_research",
+      "input": [
+        {"name": "query", "type": "string"},
+        {"name": "max_subtasks", "type": "int"}
+      ],
+      "output": "[SubTask]",
+      "effect": {
+        "level": "model",
+        "model": "plan-research-v1"
+      }
+    },
+    {
+      "name": "execute_with_checkpoints",
+      "input": [
+        {"name": "session_id", "type": "string"},
+        {"name": "subtasks", "type": "[SubTask]"},
+        {"name": "budget_seconds", "type": "int"},
+        {"name": "cost_limit_cents", "type": "int"}
+      ],
+      "output": "ResearchOutcome",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "long_research",
+      "params": [
+        {"name": "it", "type": "ResearchRequest", "implicit": true}
+      ],
+      "output": "ResearchOutcome",
+      "bindings": [
+        {
+          "name": "subtasks",
+          "expr": {
+            "kind": "call",
+            "tool": "plan_research",
+            "args": [
+              {
+                "field": "query",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "query"]
+                }
+              },
+              {
+                "field": "max_subtasks",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "max_subtasks"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "outcome",
+          "expr": {
+            "kind": "call",
+            "tool": "execute_with_checkpoints",
+            "args": [
+              {
+                "field": "session_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "session_id"]
+                }
+              },
+              {
+                "field": "subtasks",
+                "value": {
+                  "kind": "path",
+                  "segments": ["subtasks"]
+                }
+              },
+              {
+                "field": "budget_seconds",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "budget_seconds"]
+                }
+              },
+              {
+                "field": "cost_limit_cents",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "cost_limit_cents"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["outcome"]
+      }
+    }
+  ]
+}

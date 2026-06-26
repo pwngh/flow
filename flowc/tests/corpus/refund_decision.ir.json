@@ -1,0 +1,232 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/refund_decision.flow",
+  "types": [
+    {
+      "name": "RefundRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "transaction_id", "type": "string"},
+        {"name": "requested_amount", "type": "int"},
+        {"name": "reason", "type": "string"}
+      ]
+    },
+    {
+      "name": "Transaction",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "customer_id", "type": "string"},
+        {"name": "amount", "type": "int"},
+        {"name": "captured", "type": "bool"}
+      ]
+    },
+    {
+      "name": "RefundHistory",
+      "kind": "record",
+      "fields": [
+        {"name": "total_refunded", "type": "int"},
+        {"name": "n", "type": "int"}
+      ]
+    },
+    {
+      "name": "CustomerSignals",
+      "kind": "record",
+      "fields": [
+        {"name": "dispute_count", "type": "int"},
+        {"name": "fraud_score", "type": "float"},
+        {"name": "lifetime_value", "type": "int"}
+      ]
+    },
+    {
+      "name": "RefundDecision",
+      "kind": "record",
+      "fields": [
+        {"name": "outcome", "type": "string"},
+        {"name": "refunded_amount", "type": "int"},
+        {"name": "requires_review", "type": "bool"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "lookup_transaction",
+      "input": [
+        {"name": "id", "type": "string"}
+      ],
+      "output": "Transaction",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "get_refund_history",
+      "input": [
+        {"name": "txn_id", "type": "string"}
+      ],
+      "output": "RefundHistory",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "get_customer_signals",
+      "input": [
+        {"name": "cust_id", "type": "string"}
+      ],
+      "output": "CustomerSignals",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "decide_refund",
+      "input": [
+        {"name": "req", "type": "RefundRequest"},
+        {"name": "txn", "type": "Transaction"},
+        {"name": "history", "type": "RefundHistory"},
+        {"name": "signals", "type": "CustomerSignals"}
+      ],
+      "output": "RefundDecision",
+      "effect": {
+        "level": "model",
+        "model": "refund-decide-v1"
+      }
+    },
+    {
+      "name": "send_notification",
+      "input": [
+        {"name": "cust_id", "type": "string"},
+        {"name": "outcome", "type": "string"}
+      ],
+      "output": "bool",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "refund",
+      "params": [
+        {"name": "it", "type": "RefundRequest", "implicit": true}
+      ],
+      "output": "RefundDecision",
+      "bindings": [
+        {
+          "name": "txn",
+          "expr": {
+            "kind": "call",
+            "tool": "lookup_transaction",
+            "args": [
+              {
+                "field": "id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "transaction_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "history",
+          "expr": {
+            "kind": "call",
+            "tool": "get_refund_history",
+            "args": [
+              {
+                "field": "txn_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "transaction_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "signals",
+          "expr": {
+            "kind": "call",
+            "tool": "get_customer_signals",
+            "args": [
+              {
+                "field": "cust_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["txn", "customer_id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "decision",
+          "expr": {
+            "kind": "call",
+            "tool": "decide_refund",
+            "args": [
+              {
+                "field": "req",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "txn",
+                "value": {
+                  "kind": "path",
+                  "segments": ["txn"]
+                }
+              },
+              {
+                "field": "history",
+                "value": {
+                  "kind": "path",
+                  "segments": ["history"]
+                }
+              },
+              {
+                "field": "signals",
+                "value": {
+                  "kind": "path",
+                  "segments": ["signals"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "notified",
+          "expr": {
+            "kind": "call",
+            "tool": "send_notification",
+            "args": [
+              {
+                "field": "cust_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["txn", "customer_id"]
+                }
+              },
+              {
+                "field": "outcome",
+                "value": {
+                  "kind": "path",
+                  "segments": ["decision", "outcome"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["decision"]
+      }
+    }
+  ]
+}

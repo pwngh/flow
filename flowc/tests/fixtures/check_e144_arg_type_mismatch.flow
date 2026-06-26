@@ -1,0 +1,9 @@
+type User = { id: string }
+
+tool create_user(age: int) -> User
+  effect deterministic
+
+flow demo(User) -> User {
+  u = create_user(age: it.id)
+  u
+}

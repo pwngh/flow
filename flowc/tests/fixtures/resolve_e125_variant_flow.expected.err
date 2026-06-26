@@ -1,0 +1,2 @@
+tests/fixtures/resolve_e125_variant_flow.flow:4:3: error[E125]: variant 'Plan' collides with flow of the same name
+tests/fixtures/resolve_e125_variant_flow.flow:1:1: note: flow 'Plan' declared here

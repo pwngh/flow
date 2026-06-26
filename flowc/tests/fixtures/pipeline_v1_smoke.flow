@@ -1,0 +1,13 @@
+type Plan = { id: string, cost: int, score: int }
+
+tool fetch_plans(uid: string) -> [Plan]
+  effect deterministic
+
+flow tier_one(uid: string, extra: [Plan]) -> [int] {
+  fetch_plans(uid)
+    | concat extra
+    | dedupe by id
+    | rank score desc
+    | take 5
+    | select cost
+}

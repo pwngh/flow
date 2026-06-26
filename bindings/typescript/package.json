@@ -1,0 +1,38 @@
+{
+  "name": "flowd",
+  "version": "0.1.0",
+  "description": "TypeScript binding for the Flow runtime.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "flowd-codegen": "dist/codegen.js"
+  },
+  "files": [
+    "dist/",
+    "src/",
+    "binding.gyp",
+    "anthropic-worker.mjs"
+  ],
+  "peerDependencies": {
+    "@anthropic-ai/sdk": "^0.105.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:native": "node-gyp rebuild",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.cjs"
+  },
+  "engines": {
+    "node": ">= 20"
+  },
+  "gypfile": true,
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

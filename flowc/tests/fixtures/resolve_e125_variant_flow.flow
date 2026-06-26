@@ -1,0 +1,8 @@
+flow Plan(int) -> int { it }
+
+type Outcome =
+  | Plan { id: int }
+
+flow decide(string) -> Outcome {
+  Plan { id: 1 }
+}

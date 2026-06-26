@@ -1,0 +1,10 @@
+# Build outputs
+build/
+dist/
+
+# Dependencies
+node_modules/
+
+# Example run output + compiled example sources
+examples/traces/
+examples/*.js

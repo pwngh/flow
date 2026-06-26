@@ -1,0 +1,2 @@
+tests/fixtures/resolve_redeclaration_capped.flow:2:1: error[E120]: redeclaration of 'User'
+tests/fixtures/resolve_redeclaration_capped.flow:1:1: note: 'User' first declared here

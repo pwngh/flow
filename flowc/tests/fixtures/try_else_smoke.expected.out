@@ -1,0 +1,57 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/try_else_smoke.flow",
+  "types": [],
+  "tools": [
+    {
+      "name": "fetch_count",
+      "input": [
+        {"name": "id", "type": "string"}
+      ],
+      "output": "int",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "safe_count",
+      "params": [
+        {"name": "id", "type": "string", "implicit": false}
+      ],
+      "output": "int",
+      "bindings": [
+        {
+          "name": "c",
+          "expr": {
+            "kind": "try_else",
+            "try": {
+              "kind": "call",
+              "tool": "fetch_count",
+              "args": [
+                {
+                  "field": "id",
+                  "value": {
+                    "kind": "path",
+                    "segments": ["id"]
+                  }
+                }
+              ]
+            },
+            "else": {
+              "kind": "literal",
+              "value": 0,
+              "type": "int"
+            }
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["c"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+tests/fixtures/lex_bad_number_incomplete.flow:2:7: error[E106]: malformed numeric literal '1.'

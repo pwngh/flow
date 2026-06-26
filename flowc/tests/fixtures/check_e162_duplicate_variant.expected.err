@@ -1,0 +1,1 @@
+tests/fixtures/check_e162_duplicate_variant.flow:9:5: error[E162]: duplicate variant 'DeployCaused' in match arms

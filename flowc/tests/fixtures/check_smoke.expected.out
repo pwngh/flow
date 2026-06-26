@@ -1,0 +1,6 @@
+Checked tests/fixtures/check_smoke.flow
+  Flow @9:1 signup
+    Param   it : User
+    Binding user : User
+    Binding plan : Plan
+    Return         : Plan

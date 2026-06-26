@@ -1,0 +1,15 @@
+ir_version: 1.0
+types:
+  [1] string (primitive)
+  [2] int (primitive)
+  [3] float (primitive)
+  [4] bool (primitive)
+  [100] Tree (sum)
+    #0 Leaf {value: int}
+    #1 Branch {children: [Tree]}
+  [1000] [Tree] (list of Tree)
+tools:
+flows:
+variant_index:
+  Branch -> Tree#1
+  Leaf -> Tree#0

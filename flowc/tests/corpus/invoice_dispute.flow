@@ -1,0 +1,333 @@
+# invoice_dispute.flow — corpus flow #10 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Stripe Disputes API documentation (8 reason-code
+# categories, one-shot evidence submission, deadline per dispute,
+# up-to-90-day wait for issuer outcome). Cross-referenced with
+# Stripe's "Respond to disputes" guide on evidence packets per
+# category and Smart Disputes automation.
+#
+# An invoice-dispute workflow has this shape:
+#
+#   trigger      cardholder disputes payment via issuer
+#                Stripe debits merchant balance immediately
+#                webhook: dispute.created with { reason_code, category,
+#                                                 amount, evidence_due_by }
+#
+#   gather       lookup invoice / payment intent       \
+#                pull customer history (prior disputes) } parallel
+#                fetch applicable policy / terms       /
+#
+#   strategy     accept     low-value, weak evidence, repeat-disputer:
+#                           submit empty response, take the loss
+#                contest    has evidence, value > threshold:
+#                           assemble evidence packet for the category
+#                escalate   high-value, complex, legal risk:
+#                           route to finance / legal team
+#
+#   per-category evidence (only on contest path):
+#                Stripe groups reason codes into 8 categories — each
+#                category requires a different *shape* of evidence:
+#                  "credit_not_processed"     → refund attempt logs
+#                  "duplicate"                → both transaction
+#                                                receipts + customer
+#                                                acknowledgement
+#                  "fraudulent"               → IP / device fingerprint
+#                                                + 3DS auth result +
+#                                                AVS / CVV match
+#                  "general"                  → broad packet
+#                  "product_not_received"     → shipping carrier
+#                                                tracking + delivery
+#                                                signature + GPS
+#                                                geofence
+#                  "product_unacceptable"     → product description +
+#                                                fulfillment logs +
+#                                                refund-policy text
+#                  "subscription_canceled"    → cancellation log + last
+#                                                used-at timestamps
+#                  "unrecognized"             → customer communication
+#                                                + receipt + brand
+#                                                signage
+#                The 8 packets are NOT a fat record with optional
+#                fields; they are structurally different objects.
+#                Stripe's API encodes them as sum-typed.
+#
+#   submit       one-shot: cannot edit after submit, cannot resubmit
+#                Stripe forwards immediately to issuer
+#
+#   wait         up to 90 DAYS until issuer responds
+#                workflow is not running during this time — it is
+#                suspended in external state
+#
+#   outcome      won / lost / partial — incoming webhook resumes
+#                final-state handling (refund record, AR adjustment,
+#                customer notification)
+#
+# Three load-bearing facts:
+#
+#   (a) The 8 evidence categories have *different shapes*, not
+#       different values of the same shape. A shipping packet has
+#       carrier + tracking + signature + GPS coordinates; a
+#       fraudulent-charge packet has IP + device + 3DS + AVS. There
+#       is no honest fat-record that encodes both — half the fields
+#       are always wrong. This is the canonical case for sum types /
+#       variants (rubric #11), which has not surfaced in any prior
+#       flow.
+#
+#   (b) The one-shot submission is the reason evidence assembly is
+#       expensive. The merchant pays per query (shipping APIs,
+#       fingerprint lookups, 3DS audit pulls) and can only spend
+#       that cost once. Lazy evaluation of "do we have enough
+#       evidence to submit?" against the running spend matters.
+#
+#   (c) The 90-day wait is the strongest pause-and-resume shape in
+#       the corpus. Flow #8 was minutes, flow #9 was days; this is
+#       months, and the resume is triggered by an external party
+#       (the issuer) on a schedule the merchant does not control.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow handle_dispute(DisputeNotification) -> DisputeResponse {
+#     # parallel gather:
+#     invoice  = lookup_invoice(it.payment_intent_id)     # may 404 on
+#                                                          # stale archived data
+#     customer = get_customer_history(invoice.customer_id)
+#     policy   = get_applicable_policy(invoice.product_id)
+#
+#     strategy = decide_strategy(it, invoice, customer, policy)
+#                # returns "accept" | "contest" | "escalate"
+#
+#     # per-category branch with structurally different packets:
+#     evidence =
+#       if strategy == "accept":
+#         EmptyPacket {}                       # no evidence sent
+#       else if strategy == "escalate":
+#         EscalationPacket { handoff_notes: ... }
+#       else:
+#         match it.category {
+#           Fraudulent       -> assemble_fraud_evidence(invoice, customer)
+#           ProductNotReceived -> assemble_shipping_evidence(invoice)
+#           SubscriptionCanceled -> assemble_subscription_evidence(invoice, customer)
+#           Duplicate        -> assemble_duplicate_evidence(invoice)
+#           Unrecognized     -> assemble_unrecognized_evidence(invoice, customer)
+#           ProductUnacceptable -> assemble_unacceptable_evidence(invoice, policy)
+#           CreditNotProcessed -> assemble_credit_evidence(invoice)
+#           General          -> assemble_general_evidence(invoice, customer, policy)
+#         }
+#         # ↑ each branch returns a DIFFERENT TYPE; this is what
+#         # sum types do that fat records cannot.
+#
+#     # cost-aware short-circuit: if we already spent the assembly
+#     # budget and the packet is still weak, accept instead of
+#     # submitting weak evidence we cannot edit later:
+#     if evidence.strength < 0.6 and strategy == "contest":
+#       strategy = "accept"
+#       evidence = EmptyPacket {}
+#
+#     # one-shot submission:
+#     submission = submit_dispute_response(it.dispute_id, strategy, evidence)
+#
+#     # SUSPEND_UNTIL outcome event (up to 90 days):
+#     outcome = await_issuer_outcome(it.dispute_id, deadline: 90.days)
+#
+#     # post-outcome handling differs by result:
+#     if outcome.result == "won":
+#       record_dispute_won(invoice, outcome)
+#     else if outcome.result == "lost":
+#       record_dispute_lost(invoice, outcome, write_off: it.amount)
+#     else:  # partial
+#       record_dispute_partial(invoice, outcome, write_off: outcome.lost_amount)
+#
+#     DisputeResponse { strategy, submitted: submission.submitted,
+#                       outcome: outcome.result, ... }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #1   multi-branch routing — accept / contest / escalate
+#                 is 3-way at the strategy level, and contest then
+#                 fans into 8 category-specific branches. Plus the
+#                 outcome dispatch (won / lost / partial) is 3-way.
+#                 16+ effective branches in this workflow.
+#
+#   blocked: #2   parallel fan-out + join — invoice, customer history,
+#                 policy are independent lookups in production.
+#
+#   blocked: #3   in-source error handling — both forms:
+#                 (a) recovery: invoice lookup may 404 on archived
+#                     data → fallback to summary table or refer
+#                 (b) accumulation: evidence assembly across 5+ data
+#                     sources collects per-source failures into the
+#                     packet's "what's missing" list
+#                 Confirms the corpus-wide finding that #3 has two
+#                 sub-shapes (cf. flow #8).
+#
+#   blocked: #5   conditional binding — evidence-assembly runs only
+#                 on contest path; per-category assembly tools each
+#                 run only on their category. Without #5 the workflow
+#                 either runs all 8 assemblies (expensive, wasteful)
+#                 or routes through an opaque dispatcher tool.
+#
+#   blocked: #7   sub-flow composition — each category's evidence
+#                 assembly is structurally its own flow: it owns its
+#                 data sources, its own validation, its own "strong
+#                 enough to submit?" criterion. They want to be
+#                 separate flows. Today each must be a tool, losing
+#                 the composability.
+#
+#   blocked: #10  optional types — DisputeResponse.outcome populated
+#                 only after issuer responds (up to 90 days later).
+#                 EvidencePacket.gps_coordinates only on shipping
+#                 packets. Submission.submission_id only after submit
+#                 succeeds. Production code reads outcome to know
+#                 which fields are real.
+#
+#   blocked: #11  sum types / variants — FIRST OCCURRENCE in the
+#                 corpus. The 8 evidence categories are not a fat
+#                 record with optional fields; they are structurally
+#                 distinct objects. Encoding them as one record with
+#                 ~30 fields, 25 of which are null at any given time,
+#                 is the workaround that today's language forces.
+#                 If sum types appear in only one flow, they may not
+#                 warrant a Phase-1 redesign; if they appear in #13
+#                 (rag_qa source types), #18 (refinement intermediate
+#                 states), or #19 (decomposition variants), this
+#                 promotes to a core gap. Watch.
+#
+#   blocked: #12  time / scheduling — both sub-shapes surface:
+#                 12a evidence_due_by is a HARD DEADLINE; submission
+#                     after the deadline is automatically lost. The
+#                     language has no concept of "must complete by T".
+#                 12b 90-DAY pause-and-resume after submission; the
+#                     longest pause in the corpus. Strongly external
+#                     trigger — only the issuer can resume the flow.
+#
+#   blocked: #14  (PROMOTED at flow #7) lazy / short-circuit
+#                 evaluation. Fifth occurrence (flows #3, #6, #7, #9,
+#                 now #10). Two manifestations here: skip evidence
+#                 assembly entirely on "accept" path; downgrade
+#                 strategy mid-flow if the running cost has already
+#                 exceeded budget and the packet is still weak.
+#
+#   blocked: #13  Other: no string literals — strategy enum, category
+#                 enum (8 values from Stripe), outcome enum (won /
+#                 lost / partial). Recurring.
+#
+#   shippable: N — the stub below assembles evidence on every
+#                  dispute including ones that will be accepted, hits
+#                  the same evidence-assembly tool regardless of
+#                  category (so the tool internally branches on the
+#                  category — the policy lives in the wrong place),
+#                  and returns immediately as if the outcome were
+#                  known. A real disputes team running this code
+#                  would have to read the tool source to know what
+#                  evidence gets gathered for which category. In a
+#                  domain that gets audited under network-level chargeback rules, that is structurally wrong.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: serial gather, opaque strategy decision, single
+# evidence-assembly tool that internally branches on category,
+# return-before-outcome.
+
+type DisputeNotification = { dispute_id:        string,
+                           payment_intent_id: string,
+                           reason_code:       string,
+                           category:          string,
+                           amount:            int,
+                           evidence_due_by:   int }
+
+type Invoice             = { id:           string,
+                           customer_id:  string,
+                           product_id:   string,
+                           amount:       int,
+                           captured_at:  int }
+
+type CustomerHistory     = { customer_id:      string,
+                           prior_disputes:   int,
+                           lifetime_value:   int,
+                           account_age_days: int }
+
+type Policy              = { product_id:   string,
+                           refund_terms: string,
+                           sla_text:     string }
+
+type DisputeStrategy     = { kind:                  string,
+                           confidence:            float,
+                           requires_human_review: bool,
+                           rationale:             string }
+
+type EvidencePacket      = { category:                  string,
+                           shipping_receipt:          string,
+                           tracking_number:           string,
+                           delivery_signature:        string,
+                           customer_communication:    string,
+                           refund_policy_text:        string,
+                           service_documentation:     string,
+                           billing_address_match:     bool,
+                           ip_country_match:          bool,
+                           three_ds_authenticated:    bool,
+                           strength:                  float }
+
+type SubmissionResult    = { submitted:    bool,
+                           evidence_id:  string,
+                           submitted_at: int }
+
+type DisputeResponse     = { strategy:            string,
+                           submitted:           bool,
+                           evidence_id:         string,
+                           expected_outcome_by: int }
+
+tool lookup_invoice            (payment_intent_id: string)         -> Invoice
+  effect deterministic
+tool get_customer_history      (customer_id:       string)         -> CustomerHistory
+  effect deterministic
+tool get_applicable_policy     (product_id:        string)         -> Policy
+  effect deterministic
+tool decide_dispute_strategy   (notification: DisputeNotification,
+                                invoice:      Invoice,
+                                customer:     CustomerHistory,
+                                policy:       Policy)              -> DisputeStrategy
+  effect model("dispute-strategy-v1")
+tool assemble_evidence         (notification: DisputeNotification,
+                                invoice:      Invoice,
+                                customer:     CustomerHistory,
+                                strategy:     string)              -> EvidencePacket
+  effect model("evidence-assembly-v1")
+tool submit_dispute_response   (dispute_id:   string,
+                                strategy:     string,
+                                evidence:     EvidencePacket)      -> SubmissionResult
+  effect mutation
+
+flow handle_dispute(DisputeNotification) -> DisputeResponse {
+  # awkward: three independent lookups serialised; counts toward #2.
+  invoice  = lookup_invoice(it.payment_intent_id)
+  customer = get_customer_history(invoice.customer_id)
+  policy   = get_applicable_policy(invoice.product_id)
+
+  # workaround: 3-way strategy + per-customer-history rules collapse
+  # into one tool. The "should we contest at all?" policy is invisible.
+  strategy = decide_dispute_strategy(it, invoice, customer, policy)
+
+  # awkward + workaround: evidence assembly runs even on "accept"
+  # strategy (waste — counts toward #5 and #14). Also: a single
+  # EvidencePacket type with 11 fields collapses 8 structurally
+  # distinct evidence shapes into a fat record. The tool internally
+  # branches on category to populate the correct subset; the source
+  # cannot see which subset is which. Counts toward #1 and #11.
+  evidence = assemble_evidence(it, invoice, customer, strategy.kind)
+
+  # workaround: one-shot submit. The "wait up to 90 days for outcome"
+  # phase is entirely missing from the source — this flow returns as
+  # if the dispute were already resolved. The runtime model has no
+  # notion of suspending and resuming on an external webhook.
+  submission = submit_dispute_response(it.dispute_id, strategy.kind, evidence)
+
+  DisputeResponse {
+    strategy:            strategy.kind,
+    submitted:           submission.submitted,
+    evidence_id:         submission.evidence_id,
+    expected_outcome_by: it.evidence_due_by
+  }
+}

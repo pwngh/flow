@@ -1,0 +1,250 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/deploy_gate.flow",
+  "types": [
+    {
+      "name": "DeployRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "commit_sha", "type": "string"},
+        {"name": "branch", "type": "string"},
+        {"name": "environment", "type": "string"}
+      ]
+    },
+    {
+      "name": "GateResult",
+      "kind": "record",
+      "fields": [
+        {"name": "name", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "duration_ms", "type": "int"},
+        {"name": "log_url", "type": "string"},
+        {"name": "reason", "type": "string"}
+      ]
+    },
+    {
+      "name": "DeployDecision",
+      "kind": "record",
+      "fields": [
+        {"name": "allowed", "type": "bool"},
+        {"name": "blocking_gates", "type": "[string]"},
+        {"name": "requires_approval", "type": "bool"},
+        {"name": "reason", "type": "string"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "run_lint",
+      "input": [
+        {"name": "commit_sha", "type": "string"}
+      ],
+      "output": "GateResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_unit_tests",
+      "input": [
+        {"name": "commit_sha", "type": "string"}
+      ],
+      "output": "GateResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_integration_tests",
+      "input": [
+        {"name": "commit_sha", "type": "string"}
+      ],
+      "output": "GateResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_security_scan",
+      "input": [
+        {"name": "commit_sha", "type": "string"}
+      ],
+      "output": "GateResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "run_build_verify",
+      "input": [
+        {"name": "commit_sha", "type": "string"}
+      ],
+      "output": "GateResult",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "aggregate_gates",
+      "input": [
+        {"name": "lint", "type": "GateResult"},
+        {"name": "unit", "type": "GateResult"},
+        {"name": "integ", "type": "GateResult"},
+        {"name": "security", "type": "GateResult"},
+        {"name": "build", "type": "GateResult"},
+        {"name": "environment", "type": "string"}
+      ],
+      "output": "DeployDecision",
+      "effect": {
+        "level": "pure"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "gate_deploy",
+      "params": [
+        {"name": "it", "type": "DeployRequest", "implicit": true}
+      ],
+      "output": "DeployDecision",
+      "bindings": [
+        {
+          "name": "lint",
+          "expr": {
+            "kind": "call",
+            "tool": "run_lint",
+            "args": [
+              {
+                "field": "commit_sha",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "commit_sha"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "unit",
+          "expr": {
+            "kind": "call",
+            "tool": "run_unit_tests",
+            "args": [
+              {
+                "field": "commit_sha",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "commit_sha"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "integ",
+          "expr": {
+            "kind": "call",
+            "tool": "run_integration_tests",
+            "args": [
+              {
+                "field": "commit_sha",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "commit_sha"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "security",
+          "expr": {
+            "kind": "call",
+            "tool": "run_security_scan",
+            "args": [
+              {
+                "field": "commit_sha",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "commit_sha"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "build",
+          "expr": {
+            "kind": "call",
+            "tool": "run_build_verify",
+            "args": [
+              {
+                "field": "commit_sha",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "commit_sha"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "decision",
+          "expr": {
+            "kind": "call",
+            "tool": "aggregate_gates",
+            "args": [
+              {
+                "field": "lint",
+                "value": {
+                  "kind": "path",
+                  "segments": ["lint"]
+                }
+              },
+              {
+                "field": "unit",
+                "value": {
+                  "kind": "path",
+                  "segments": ["unit"]
+                }
+              },
+              {
+                "field": "integ",
+                "value": {
+                  "kind": "path",
+                  "segments": ["integ"]
+                }
+              },
+              {
+                "field": "security",
+                "value": {
+                  "kind": "path",
+                  "segments": ["security"]
+                }
+              },
+              {
+                "field": "build",
+                "value": {
+                  "kind": "path",
+                  "segments": ["build"]
+                }
+              },
+              {
+                "field": "environment",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "environment"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["decision"]
+      }
+    }
+  ]
+}

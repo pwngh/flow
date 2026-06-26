@@ -1,0 +1,56 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/arith_smoke.flow",
+  "types": [],
+  "tools": [],
+  "flows": [
+    {
+      "name": "geometric",
+      "params": [
+        {"name": "a", "type": "int", "implicit": false},
+        {"name": "b", "type": "int", "implicit": false},
+        {"name": "c", "type": "int", "implicit": false}
+      ],
+      "output": "bool",
+      "bindings": [
+        {
+          "name": "x",
+          "expr": {
+            "kind": "binop",
+            "op": "*",
+            "left": {
+              "kind": "binop",
+              "op": "+",
+              "left": {
+                "kind": "path",
+                "segments": ["a"]
+              },
+              "right": {
+                "kind": "path",
+                "segments": ["b"]
+              }
+            },
+            "right": {
+              "kind": "literal",
+              "value": 2,
+              "type": "int"
+            }
+          }
+        }
+      ],
+      "return": {
+        "kind": "binop",
+        "op": "==",
+        "left": {
+          "kind": "path",
+          "segments": ["x"]
+        },
+        "right": {
+          "kind": "path",
+          "segments": ["c"]
+        }
+      }
+    }
+  ]
+}

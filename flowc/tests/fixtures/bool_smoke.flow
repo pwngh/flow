@@ -1,0 +1,7 @@
+flow gate(a: bool, b: bool, c: bool) -> int {
+  approve = not (a and b) or c
+  if approve then
+    1
+  else
+    0
+}

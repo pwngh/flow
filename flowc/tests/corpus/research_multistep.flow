@@ -1,0 +1,142 @@
+# research_multistep.flow — corpus flow #4 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: github.com/assafelovic/gpt-researcher (planner /
+# executor / writer architecture). Cross-referenced with the LangGraph
+# multi-agent research example and the published gpt-researcher
+# DeepResearch tree-exploration mode.
+#
+# A multi-step web-research task has this shape:
+#
+#   plan        planner(query) → [Question]                # ~5–10 sub-questions
+#
+#   execute     for each Question:                         # map; parallel
+#                 urls = search(question.text)             # → [Source]
+#                 for each url in urls:                    # nested map; parallel
+#                   page = scrape(url)                     # may fail (paywall, 404)
+#                   excerpts = extract(page, question)
+#                 summary = summarize(question, excerpts)  # with citations
+#                 → QuestionResult { summary, citations }
+#
+#   aggregate   reduce over [QuestionResult] → all_summaries, all_citations
+#
+#   synthesize  writer(query, all_summaries) → ResearchReport
+#
+# The load-bearing constructs are MAP (over sub-questions; over URLs
+# per sub-question) and REDUCE (aggregating per-question results into
+# a final report). Both nested levels of the map are parallelisable in
+# production. gpt-researcher's "Deep Research" mode adds a third axis:
+# each sub-question can recursively spawn its own sub-questions until
+# a depth budget is exhausted (i.e., the workflow calls itself).
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow research(ResearchRequest) -> ResearchReport {
+#     questions = plan_questions(it.query)   # [Question]
+#
+#     # nested map (parallel both levels):
+#     per_q = map(questions, q -> {
+#       urls = search(q.text)                # [Source]
+#       pages = map(urls, u -> {
+#         page = try scrape(u.url) catch _ -> EmptyPage
+#         extract(page, q)
+#       })
+#       summarize(q, pages)                  # QuestionResult
+#     })
+#
+#     # reduce:
+#     all_summaries = fold(per_q, [], acc, qr -> append(acc, qr.summary))
+#     all_citations = fold(per_q, [], acc, qr -> concat(acc, qr.citations))
+#
+#     synthesize(it.query, all_summaries, all_citations)
+#   }
+#
+# Deep-research variant adds a recursive call: the map body may call
+# research() again with a narrower query, gated by depth_remaining > 0.
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #4   loops / fold / map over a list — THE central gap for
+#                 this flow. Two nested maps (questions; URLs per
+#                 question) plus a reduce. The language has `where /
+#                 rank / top / pick using` which reduces a list to ONE
+#                 element. It has no way to produce a list-shaped
+#                 result from a list. With no map, multi-step research
+#                 cannot be expressed at all; the planner step becomes
+#                 dead structure handed to an opaque executor.
+#
+#   blocked: #2   parallel fan-out + join — the per-question loop is
+#                 embarrassingly parallel (gpt-researcher runs sub-
+#                 questions concurrently as a primary design point).
+#                 Inside each, URL scraping is also parallel. Two
+#                 levels of fan-out missing.
+#
+#   blocked: #3   in-source error handling — scrape() fails routinely
+#                 on paywalls, 404s, rate limits. Production behaviour:
+#                 skip the failed URL, continue with what worked.
+#                 R101-as-abort would kill the whole research run on
+#                 any single bad URL.
+#
+#   blocked: #7   sub-flow composition — Deep Research recurses:
+#                 research(narrower_query, depth-1) called from inside
+#                 the per-question map. The language cannot reference
+#                 a flow from inside another flow.
+#
+#   blocked: #13  Other: aggregation primitives (concat, append, sum,
+#                 group_by). Even if `map` existed, reduce-side needs
+#                 list-combining ops the language has no notion of.
+#                 Distinct from #4 — map produces a new list; reduce
+#                 collapses one. Treat as separate slot if it shows up
+#                 in flow 7, 16, or 19.
+#
+#   blocked: #12  time / scheduling — research has wall-clock budgets
+#                 ("stop after 5 minutes, return what you have").
+#                 No source-level encoding for deadlines.
+#
+#   shippable: N — the workflow is fundamentally degenerate in Flow.
+#                  What compiles below does call a planner, but the
+#                  planner's output is then handed to a single
+#                  monolithic executor tool that hides the entire
+#                  map-reduce loop, the parallel fan-out, the URL
+#                  scraping, the aggregation, and the synthesis. The
+#                  source describes "ask the planner, then ask the
+#                  oracle." That is not multi-step research; that is
+#                  one-step delegation.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: plan exposes [Question], then a monolithic executor
+# does the rest. The planner step is visible only because it returns
+# a list whose elements are never visited.
+
+type ResearchRequest = { query: string }
+
+type Question        = { id: string, text: string }
+
+type Citation        = { url: string, title: string, excerpt: string }
+
+type ResearchReport  = { summary: string,
+                       citations: [Citation],
+                       confidence: float }
+
+tool plan_questions          (query: string)            -> [Question]
+  effect model("planner-v1")
+tool execute_research_plan   (query:     string,
+                              questions: [Question])    -> ResearchReport
+  effect model("researcher-v1")
+
+flow research(ResearchRequest) -> ResearchReport {
+  # awkward: returns [Question] but nothing in source can visit the
+  # elements. The list exists only to be passed to the next tool,
+  # which loops over it internally — out of view of the source.
+  questions = plan_questions(it.query)
+
+  # workaround: the entire map-reduce — search per question, scrape
+  # per URL, extract, per-question summarize, cross-question
+  # aggregate, final synthesize — collapses into one opaque tool.
+  # Two levels of parallelism and all error handling are invisible.
+  report = execute_research_plan(it.query, questions)
+
+  report
+}

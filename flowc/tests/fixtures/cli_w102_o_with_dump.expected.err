@@ -1,0 +1,1 @@
+tests/fixtures/cli_w102_o_with_dump.flow:1:1: warning[W102]: -o 'out.ir.json' has no effect with --dump=tokens; dump output goes to stdout

@@ -1,0 +1,8 @@
+type Approval = { approver: string, ok: bool }
+
+tool await_human_approval(prompt: string) -> Approval
+  effect mutation
+
+flow gate(string) -> Approval {
+  await_human_approval(it)
+}

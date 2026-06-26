@@ -1,0 +1,1 @@
+tests/fixtures/check_e141_missing_arg.flow:7:7: error[E141]: missing required argument 'locale'

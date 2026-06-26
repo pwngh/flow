@@ -1,0 +1,9 @@
+type RiskReport = { score: int, flagged: bool }
+
+tool risk_check(amount: int) -> RiskReport
+  effect model("risk-v1")
+
+flow score(int) -> int {
+  report = risk_check(it)
+  report.score
+}

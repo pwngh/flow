@@ -1,0 +1,6 @@
+type Plan = { id: int, cost: int }
+
+flow choose([Plan]) -> [Plan] {
+  picked = it | select totally_bogus_name
+  picked
+}

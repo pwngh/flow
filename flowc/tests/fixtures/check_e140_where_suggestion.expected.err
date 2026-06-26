@@ -1,0 +1,1 @@
+tests/fixtures/check_e140_where_suggestion.flow:9:19: error[E140]: no field 'zp' on type 'Addr'; did you mean 'zip'?

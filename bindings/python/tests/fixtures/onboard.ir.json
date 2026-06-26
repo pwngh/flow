@@ -1,0 +1,132 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "2026-06-15T23:22:55Z",
+  "source_file": "bindings/python/tests/fixtures/onboard.flow",
+  "types": [
+    {
+      "name": "Customer",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "amount", "type": "int"}
+      ]
+    },
+    {
+      "name": "Decision",
+      "kind": "record",
+      "fields": [
+        {"name": "approved", "type": "bool"},
+        {"name": "score", "type": "int"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "credit_check",
+      "input": [
+        {"name": "id", "type": "string"}
+      ],
+      "output": "int",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "record_decision",
+      "input": [
+        {"name": "id", "type": "string"},
+        {"name": "approved", "type": "bool"}
+      ],
+      "output": "bool",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "onboard",
+      "params": [
+        {"name": "it", "type": "Customer", "implicit": true}
+      ],
+      "output": "Decision",
+      "bindings": [
+        {
+          "name": "score",
+          "expr": {
+            "kind": "call",
+            "tool": "credit_check",
+            "args": [
+              {
+                "field": "id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "id"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "approved",
+          "expr": {
+            "kind": "binop",
+            "op": ">",
+            "left": {
+              "kind": "path",
+              "segments": ["score"]
+            },
+            "right": {
+              "kind": "literal",
+              "value": 700,
+              "type": "int"
+            }
+          }
+        },
+        {
+          "name": "done",
+          "expr": {
+            "kind": "call",
+            "tool": "record_decision",
+            "args": [
+              {
+                "field": "id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "id"]
+                }
+              },
+              {
+                "field": "approved",
+                "value": {
+                  "kind": "path",
+                  "segments": ["approved"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "construct",
+        "type": "Decision",
+        "fields": [
+          {
+            "name": "approved",
+            "value": {
+              "kind": "path",
+              "segments": ["approved"]
+            }
+          },
+          {
+            "name": "score",
+            "value": {
+              "kind": "path",
+              "segments": ["score"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

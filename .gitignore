@@ -1,0 +1,14 @@
+# Trace output written by `flowd run` / the runtime (default ./traces)
+traces/
+traces_*/
+
+# macOS Finder
+.DS_Store
+._*
+
+# Editors
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

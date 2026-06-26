@@ -1,0 +1,306 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/fraud_fanout.flow",
+  "types": [
+    {
+      "name": "PaymentAttempt",
+      "kind": "record",
+      "fields": [
+        {"name": "payment_id", "type": "string"},
+        {"name": "customer_id", "type": "string"},
+        {"name": "amount", "type": "int"},
+        {"name": "currency", "type": "string"},
+        {"name": "device_fingerprint", "type": "string"},
+        {"name": "ip", "type": "string"},
+        {"name": "email", "type": "string"},
+        {"name": "billing_country", "type": "string"}
+      ]
+    },
+    {
+      "name": "DeviceSignal",
+      "kind": "record",
+      "fields": [
+        {"name": "fingerprint_known", "type": "bool"},
+        {"name": "risk_score", "type": "float"},
+        {"name": "suspicious_traits", "type": "int"}
+      ]
+    },
+    {
+      "name": "VelocitySignal",
+      "kind": "record",
+      "fields": [
+        {"name": "txns_last_hour", "type": "int"},
+        {"name": "distinct_cards_last_day", "type": "int"},
+        {"name": "risk_score", "type": "float"}
+      ]
+    },
+    {
+      "name": "GeoSignal",
+      "kind": "record",
+      "fields": [
+        {"name": "ip_country", "type": "string"},
+        {"name": "mismatch", "type": "bool"},
+        {"name": "vpn_detected", "type": "bool"},
+        {"name": "risk_score", "type": "float"}
+      ]
+    },
+    {
+      "name": "ListSignal",
+      "kind": "record",
+      "fields": [
+        {"name": "on_allowlist", "type": "bool"},
+        {"name": "on_blocklist", "type": "bool"},
+        {"name": "list_name", "type": "string"}
+      ]
+    },
+    {
+      "name": "FraudDecision",
+      "kind": "record",
+      "fields": [
+        {"name": "outcome", "type": "string"},
+        {"name": "score", "type": "int"},
+        {"name": "requires_3ds", "type": "bool"},
+        {"name": "requires_manual_review", "type": "bool"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "check_allow_block_lists",
+      "input": [
+        {"name": "customer_id", "type": "string"},
+        {"name": "email", "type": "string"}
+      ],
+      "output": "ListSignal",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "check_device",
+      "input": [
+        {"name": "fingerprint", "type": "string"}
+      ],
+      "output": "DeviceSignal",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "check_velocity",
+      "input": [
+        {"name": "customer_id", "type": "string"},
+        {"name": "amount", "type": "int"}
+      ],
+      "output": "VelocitySignal",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "check_geo",
+      "input": [
+        {"name": "ip", "type": "string"},
+        {"name": "billing_country", "type": "string"}
+      ],
+      "output": "GeoSignal",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "combine_signals",
+      "input": [
+        {"name": "device", "type": "DeviceSignal"},
+        {"name": "velocity", "type": "VelocitySignal"},
+        {"name": "geo", "type": "GeoSignal"},
+        {"name": "lists", "type": "ListSignal"}
+      ],
+      "output": "int",
+      "effect": {
+        "level": "model",
+        "model": "ensemble-score-v1"
+      }
+    },
+    {
+      "name": "dispatch_decision",
+      "input": [
+        {"name": "req", "type": "PaymentAttempt"},
+        {"name": "score", "type": "int"},
+        {"name": "lists", "type": "ListSignal"}
+      ],
+      "output": "FraudDecision",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "score_fraud",
+      "params": [
+        {"name": "it", "type": "PaymentAttempt", "implicit": true}
+      ],
+      "output": "FraudDecision",
+      "bindings": [
+        {
+          "name": "lists",
+          "expr": {
+            "kind": "call",
+            "tool": "check_allow_block_lists",
+            "args": [
+              {
+                "field": "customer_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "customer_id"]
+                }
+              },
+              {
+                "field": "email",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "email"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "device",
+          "expr": {
+            "kind": "call",
+            "tool": "check_device",
+            "args": [
+              {
+                "field": "fingerprint",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "device_fingerprint"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "velocity",
+          "expr": {
+            "kind": "call",
+            "tool": "check_velocity",
+            "args": [
+              {
+                "field": "customer_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "customer_id"]
+                }
+              },
+              {
+                "field": "amount",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "amount"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "geo",
+          "expr": {
+            "kind": "call",
+            "tool": "check_geo",
+            "args": [
+              {
+                "field": "ip",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "ip"]
+                }
+              },
+              {
+                "field": "billing_country",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "billing_country"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "score",
+          "expr": {
+            "kind": "call",
+            "tool": "combine_signals",
+            "args": [
+              {
+                "field": "device",
+                "value": {
+                  "kind": "path",
+                  "segments": ["device"]
+                }
+              },
+              {
+                "field": "velocity",
+                "value": {
+                  "kind": "path",
+                  "segments": ["velocity"]
+                }
+              },
+              {
+                "field": "geo",
+                "value": {
+                  "kind": "path",
+                  "segments": ["geo"]
+                }
+              },
+              {
+                "field": "lists",
+                "value": {
+                  "kind": "path",
+                  "segments": ["lists"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "decision",
+          "expr": {
+            "kind": "call",
+            "tool": "dispatch_decision",
+            "args": [
+              {
+                "field": "req",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "score",
+                "value": {
+                  "kind": "path",
+                  "segments": ["score"]
+                }
+              },
+              {
+                "field": "lists",
+                "value": {
+                  "kind": "path",
+                  "segments": ["lists"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["decision"]
+      }
+    }
+  ]
+}

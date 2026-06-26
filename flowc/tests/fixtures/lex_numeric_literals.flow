@@ -1,0 +1,7 @@
+flow nums(int) -> float {
+  big   = 1_000_000
+  sci   = 6.022e23
+  small = 1.5e-3
+  pi    = 3.141_592
+  pi
+}

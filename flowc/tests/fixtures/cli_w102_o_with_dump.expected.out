@@ -1,0 +1,10 @@
+tests/fixtures/cli_w102_o_with_dump.flow:1:1: KW_FLOW
+tests/fixtures/cli_w102_o_with_dump.flow:1:6: IDENT 'f'
+tests/fixtures/cli_w102_o_with_dump.flow:1:7: '('
+tests/fixtures/cli_w102_o_with_dump.flow:1:8: KW_INT
+tests/fixtures/cli_w102_o_with_dump.flow:1:11: ')'
+tests/fixtures/cli_w102_o_with_dump.flow:1:13: ARROW
+tests/fixtures/cli_w102_o_with_dump.flow:1:16: KW_INT
+tests/fixtures/cli_w102_o_with_dump.flow:1:20: '{'
+tests/fixtures/cli_w102_o_with_dump.flow:2:3: KW_IT
+tests/fixtures/cli_w102_o_with_dump.flow:3:1: '}'

@@ -1,0 +1,275 @@
+.TH FLOW 5 "May 2026" "" "Flow Manual"
+.SH NAME
+flow \- the Flow source language
+.SH DESCRIPTION
+A
+.I .flow
+file declares the type schema, the tool interface, and
+the pipeline of one or more named flows.  The file is UTF-8 text;
+comments start with
+.B #
+and run to end of line.  Identifiers begin with a letter or
+underscore and continue with letters, digits, or underscores.
+Whitespace is non-significant except as a separator.
+.PP
+A complete file has three sections, in source order: type
+declarations, tool declarations, flow declarations.
+Each section is optional but appears in this order when present.
+.SH TYPES
+Type declarations introduce record types used by tools and flows:
+.PP
+.RS
+.nf
+type Application = {
+  applicant_id: string,
+  amount:       float
+}
+
+type CreditHistory = {
+  delinquencies: int
+}
+.fi
+.RE
+.PP
+The
+.B =
+between the type name and the brace is required, and fields are
+separated by commas (a trailing comma is permitted).
+.PP
+Field types are primitives
+.RB ( string ,
+.BR int ,
+.BR float ,
+.BR bool ),
+record types declared elsewhere, or list types written
+.BR [T] .
+Record types are nominally typed; two records with the same
+fields and different names are distinct types.
+.PP
+Sum types declare named variants.  The body is a list of variants,
+each introduced by a leading
+.BR | ,
+with no
+.B sum
+keyword:
+.PP
+.RS
+.nf
+type Hypothesis =
+  | DeployCaused { suspect_deploy_id: string, diff_url: string }
+  | Unknown      { confidence: float }
+.fi
+.RE
+.PP
+Variants are matched with
+.B match
+expressions in flow bodies.
+.SH TOOLS
+Tool declarations name a callable, give its typed signature, and
+declare its effect level.  The
+.B effect
+clause is mandatory; a tool with no effect clause is rejected
+with diagnostic
+.BR E198 .
+.PP
+.RS
+.nf
+tool fetch_credit(id: string) -> CreditHistory
+  effect deterministic
+
+tool assess_risk(app: Application, credit: CreditHistory) -> RiskScore
+  effect model("risk-v1")
+
+tool send_email(to: string, body: string) -> bool
+  effect mutation
+.fi
+.RE
+.PP
+The effect level is exactly one of
+.BR pure ,
+.BR deterministic ,
+.BR mutation ,
+or
+.BR model ( \[dq] id \[dq] ).
+A model-level tool carries a model identifier in parentheses; the
+identifier is opaque to the compiler and meaningful only to the
+runtime's gateway.  The level may be followed by an optional
+.B retry
+clause, for example
+.BR "effect deterministic (retry: 3)" .
+.PP
+There is no separate
+.B model
+declaration: a model is named only by a tool's
+.B model("id")
+effect, or by a
+.B pick using
+stage inside a pipeline.
+.SH FLOWS
+A flow declares a typed pipeline from input to output:
+.PP
+.RS
+.nf
+flow eligible(apps: [Application]) -> [Application] {
+  apps
+  | select EnrichedApp {
+      app:    row,
+      credit: fetch_credit(row.applicant_id),
+      risk:   assess_risk(row, credit)
+    }
+  | where credit.delinquencies == 0 and risk.score < 0.5
+  | select app
+}
+.fi
+.RE
+.PP
+The body is enclosed in braces and is zero or more
+.RB ` "name = expr" '
+bindings followed by a required return expression.  The return
+expression here is a pipeline: a chain of stages connected by
+.BR | ,
+where each stage consumes the output of the previous one.  In
+expression stages such as
+.B select
+and
+.BR any / all ,
+the current element is bound to
+.B row
+and the element's fields are also in scope by bare name.  A
+.B where
+or
+.B rank
+clause names the element's fields directly by bare name and does not
+use a
+.B row
+prefix.
+A flow with a single parameter may name it
+.B it
+implicitly by writing the parameter as a bare type, as in
+.RB ` "flow review(Application) -> Decision" '.
+.SH PIPELINE STAGES
+.TP
+.B select <expr>
+Transform each row by constructing a new record or projecting a
+field.
+.TP
+.B where <pred>
+Filter rows by a boolean predicate.  Operands are the element's
+fields named directly (no
+.B row
+prefix), outer bindings, literals, or calls, compared with
+.BR == ", " != ", " < ", " > ", " <= ", " >=
+and joined by
+.B and
+and
+.BR or .
+.TP
+.B rank <field> asc|desc
+Sort rows by a field, ascending or descending.
+.TP
+.B dedupe by <expr>
+Remove duplicate rows by a key expression.
+.TP
+.B concat <expr>
+Concatenate another list of the same row type.
+.TP
+.B take <int>
+Take the first
+.I n
+rows.  The count is a literal integer.
+.TP
+.B top
+Terminal stage: yield the single first row, typically after a
+.BR rank .
+Fails with diagnostic
+.B R110
+on empty input.
+.TP
+.B pick using <model>
+Terminal stage: have a model rank candidates and return the single
+best one.  Fails with diagnostic
+.B R110
+on empty input.
+.TP
+.B count
+Terminal aggregator: yield the number of rows.
+.TP
+.B "sum / max / min <field>"
+Terminal aggregators that reduce a numeric field across rows.
+.TP
+.B any / all <expr>
+Terminal aggregators that yield a boolean over the rows.
+.SH CONTROL FLOW
+Flows can branch and compose:
+.PP
+.RS
+.nf
+flow review(Application) -> Decision {
+  band = risk_band(it)
+  match band {
+    High   h -> await_human_approval(it),
+    Medium m -> standard_review(it),
+    Low    l -> auto_approve(it)
+  }
+}
+.fi
+.RE
+.TP
+.B match
+Dispatch on a sum-type value.  The scrutinee must be a path, so a
+computed value is bound first
+.RB ( "band = risk_band(it)" ).
+The arms are written inside braces, separated by commas, each as
+.RB ` "Pattern -> expr" '.
+A pattern is an upper-case variant tag (optionally followed by a
+binder name), a lower-case binder that matches the whole value, or
+.B _
+as a wildcard.  Matches must be exhaustive.
+.TP
+.B conditional
+Inline
+.B "if A then B else C"
+on a boolean; the
+.B else
+arm is required, and may be chained with
+.BR "else if" .
+.TP
+.B try / else
+.B "try E else F"
+runs
+.IR E ;
+on failure it runs
+.IR F .
+Both must have the same type.  Used for graceful degradation of
+Level 1 lookups; the recovered codes are runtime errors such as
+.BR R101 .
+.TP
+Sub-flow calls
+A flow may call another flow declared in the same file.  The
+call is type-checked the same way a tool call is.
+.SH DIAGNOSTICS
+The compiler emits diagnostics with stable identifiers.
+.B E10x
+codes cover the lexer (E101 non-ASCII byte outside a comment, E105
+unexpected character, E106 malformed numeric literal, ...);
+.B E11x
+covers parse errors (E110 syntax error);
+.B E12x
+covers the resolver (E122 unknown tool or flow, E123 unknown type,
+E124 unknown name, E198 tool missing its
+.B effect
+clause, ...);
+.B E14x
+and
+.B E15x
+cover the checker (E144 argument type incompatible, E143 predicate
+must be
+.BR bool ,
+E160 non-exhaustive match, ...).  Runtime diagnostics use
+.B R1xx
+identifiers (R101 tool call failed, R110
+.BR top / "pick using"
+on empty input).  The id is stable across versions; the message
+text may change.  See
+.B vscode-flow
+for editor integration that consumes these codes.

@@ -1,0 +1,2 @@
+tests/fixtures/resolve_e125_variant_tool.flow:5:3: error[E125]: variant 'Plan' collides with tool of the same name
+tests/fixtures/resolve_e125_variant_tool.flow:1:1: note: tool 'Plan' declared here

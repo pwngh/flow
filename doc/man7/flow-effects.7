@@ -1,0 +1,96 @@
+.TH FLOW-EFFECTS 7 "May 2026" "" "Flow Manual"
+.SH NAME
+flow-effects \- the Flow effect-level hierarchy
+.SH DESCRIPTION
+Every tool the runtime invokes sits at one of four effect levels.
+The level is an IR field carried on every tool's signature.  The
+runtime's behavior at each node \(em caching, retry, parallelism,
+and replay strategy \(em derives from the level.  The effect
+level is the property that makes model-versioned replay safe to
+perform automatically: the runtime knows from the level alone
+which nodes can re-invoke, which restore from trace, and which
+must never re-invoke.
+.SH LEVELS
+.TP
+.B "Level 0 \(em pure"
+No I/O.  Same inputs always produce the same outputs.
+Memoizable freely.  Replayable locally without re-invocation,
+since recomputation produces the same bytes the trace recorded.
+.TP
+.B "Level 1 \(em deterministic"
+External lookup, no side effects.  Same inputs produce the same
+outputs modulo external state.  Cacheable; replay may either
+re-invoke or restore from trace.  Typical examples: a credit
+history lookup, a database read, a pure HTTP GET.
+.TP
+.B "Level 2 \(em model"
+Nondeterministic by nature \(em LLMs, samplers, human judgment.
+Inputs are deterministic; outputs vary.  Replay restores from
+trace by default; model-versioned replay re-invokes against a
+different model identity with the recorded inputs.
+.TP
+.B "Level 3 \(em mutation"
+Side-effectful.  Sends emails, writes databases, publishes
+events.  Not safely retryable without idempotency tokens.
+Replay against a mutation node restores from trace and does NOT
+re-invoke unless explicitly directed.
+.SH FAILURE SEMANTICS
+.TP
+.B "Level 0 failure"
+Programming error.  The runtime fails the node loudly with the
+failure recorded in the trace.  No retry.  A pure tool should
+not, in principle, fail at all; if one does, the flow is buggy.
+.TP
+.B "Level 1 failure"
+Transient failures (network errors, timeouts, HTTP 5xx) fail the
+node on the first attempt.  Deterministic tools are not retried: the
+runtime makes a single call and surfaces any failure immediately.
+Retry is wired only into the model gateway (see Level 2); a retry
+policy on a non-model effect clause has no effect.  On failure the
+node fails with diagnostic
+.BR R101 .
+.TP
+.B "Level 2 failure"
+Output nondeterminism is expected and not retried as such; only
+transport errors retry.  The model gateway handles its own retry
+policy.
+.TP
+.B "Level 3 failure"
+Failure of a mutation node means the side effect may or may not
+have taken place.  Retry requires an idempotency token supplied
+by the host.  Without one, the runtime fails the node and
+records partial-side-effect status in the trace.
+.SH REPLAY SEMANTICS
+A model-versioned replay walks the original trace and:
+.IP \(bu 2
+restores Level 0 and Level 1 node outputs from the trace (Level
+0 may be recomputed; the result is identical by construction),
+.IP \(bu 2
+re-invokes Level 2 nodes against the new model with the recorded
+inputs,
+.IP \(bu 2
+restores Level 3 nodes from the trace and does NOT re-invoke.
+.PP
+This split is what makes model-versioned replay safe: the
+side-effect boundary is honored without manual coordination
+between the runtime and the host.  A compliance reviewer
+certifying a model upgrade does not have to know which nodes
+write to which downstream systems; the IR's declared effect
+levels carry that information.
+.SH SOURCE SYNTAX
+In a
+.I .flow
+source file, effect levels are declared on tool signatures:
+.PP
+.RS
+.nf
+tool fetch_credit(id: string) -> CreditHistory
+  effect deterministic
+
+tool assess_risk(app: Application, credit: CreditHistory) -> RiskScore
+  effect model("risk-v1")
+
+tool send_email(to: string, body: string) -> bool
+  effect mutation
+.fi
+.RE

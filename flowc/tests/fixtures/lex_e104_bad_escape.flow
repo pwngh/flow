@@ -1,0 +1,2 @@
+tool assess_risk(id: string) -> bool
+  effect model("risk\q1")

@@ -1,0 +1,21 @@
+type SignupRequest = { email: string }
+type User = { id: string, email: string }
+type Plan = { id: string, cost: int,
+                     expected_value: int, success_rate: float }
+type OnboardResult = { user: User, plan: Plan }
+
+tool create_user   (email: string) -> User
+  effect deterministic
+tool propose_plans (user: User)    -> [Plan]
+  effect deterministic
+
+flow onboard(SignupRequest) -> OnboardResult {
+  user = create_user(it.email)
+
+  plan = propose_plans(user)
+       | where cost <= 100 and success_rate >= 0.9
+       | rank  expected_value desc
+       | pick  using primary
+
+  OnboardResult { user, plan }
+}

@@ -1,0 +1,59 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/if_smoke.flow",
+  "types": [],
+  "tools": [],
+  "flows": [
+    {
+      "name": "grade",
+      "params": [
+        {"name": "score", "type": "int", "implicit": false},
+        {"name": "high", "type": "bool", "implicit": false},
+        {"name": "mid", "type": "bool", "implicit": false}
+      ],
+      "output": "int",
+      "bindings": [
+        {
+          "name": "tier",
+          "expr": {
+            "kind": "conditional",
+            "branches": [
+              {
+                "cond": {
+                  "kind": "path",
+                  "segments": ["high"]
+                },
+                "consequent": {
+                  "kind": "literal",
+                  "value": 4,
+                  "type": "int"
+                }
+              },
+              {
+                "cond": {
+                  "kind": "path",
+                  "segments": ["mid"]
+                },
+                "consequent": {
+                  "kind": "literal",
+                  "value": 2,
+                  "type": "int"
+                }
+              }
+            ],
+            "else": {
+              "kind": "literal",
+              "value": 0,
+              "type": "int"
+            }
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["tier"]
+      }
+    }
+  ]
+}

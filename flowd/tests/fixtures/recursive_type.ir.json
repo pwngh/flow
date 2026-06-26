@@ -1,0 +1,25 @@
+{
+  "ir_version": "1.0",
+  "types": [
+    {
+      "name": "Tree",
+      "kind": "sum",
+      "variants": [
+        {
+          "name": "Leaf",
+          "fields": [
+            {"name": "value", "type": "int"}
+          ]
+        },
+        {
+          "name": "Branch",
+          "fields": [
+            {"name": "children", "type": "[Tree]"}
+          ]
+        }
+      ]
+    }
+  ],
+  "tools": [],
+  "flows": []
+}

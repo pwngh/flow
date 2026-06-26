@@ -1,0 +1,201 @@
+.TH FLOWC 1 "May 2026" "" "Flow Manual"
+.SH NAME
+flowc \- the Flow compiler
+.SH SYNOPSIS
+.B flowc
+.RI [ options ]
+.I file
+.PP
+.B flowc --help
+.br
+.B flowc --version
+.SH DESCRIPTION
+.B flowc
+reads a
+.I .flow
+source file, lexes it into tokens, parses the tokens into an
+abstract syntax tree, resolves names against the declarations at
+the top of the file, type-checks every tool call and pipeline
+stage against the declared signatures, and emits a JSON
+intermediate representation.  Diagnostics go to standard error;
+the IR goes to standard output unless
+.B -o
+is given.
+.PP
+.B flowc
+does not generate code in any host language, link a runtime, or
+execute flows.  Those are jobs for downstream tooling that reads
+the IR.  The library form,
+.B libflowc.a ,
+exposes the same compilation pipeline to in-process callers; it is
+the foundation for editor and watch-mode integrations.
+.SH OPTIONS
+Exactly one input file is required.  Reading source from standard
+input is not supported.
+.SS Overall options
+.TP
+.BI -o " file"
+Write the IR to
+.I file
+instead of standard output.  A
+.I file
+of
+.B -
+means standard output.
+.TP
+.B -c
+Accepted for compatibility; has no effect.
+.TP
+.BI -x " flow"
+Specify the input language.  Only
+.B flow
+is accepted.
+.TP
+.B --help
+Show usage and exit.
+.TP
+.B --version
+Show version and exit.
+.SS Warning options
+.TP
+.B -Wall
+Accepted for compatibility; performs no additional checks.
+.TP
+.B -Wextra
+Accepted for compatibility; performs no additional checks.
+.TP
+.B -Wpedantic
+Accepted for compatibility; performs no additional checks.
+.TP
+.B -Werror
+Treat all warnings as errors.
+.TP
+.BI -Werror= id
+Accepted for compatibility; the bare
+.B -Werror
+applies, but per-warning
+.I id
+selection performs no additional action.
+.TP
+.BI -Wno- id
+Accepted for compatibility; performs no additional action.
+.TP
+.B -w
+Accepted for compatibility; performs no additional action.
+.SS Diagnostic options
+.TP
+.BI -fdiagnostics-format= fmt
+Select the diagnostic format:
+.B text
+(the default) or
+.BR json .
+.TP
+.B -fno-diagnostics-color
+Disable color in textual diagnostics.
+.TP
+.BI -fmax-errors= n
+Stop after
+.I n
+errors.  A value of
+.B 0
+means unlimited; the default is
+.BR 1 .
+.SS Language options
+.TP
+.B -std=flow-v0
+The default language standard.
+.TP
+.B -std=flow-v0-strict
+Accepted for compatibility; strict mode is not yet implemented, so
+this behaves the same as
+.BR -std=flow-v0 .
+.SS Debug and internals
+.TP
+.BI --dump= stage
+Stop after
+.I stage
+and emit the intermediate state.  Valid stages are
+.BR tokens ,
+.BR ast ,
+.BR resolved ,
+.BR checked ,
+and
+.BR ir .
+The compiler exits after the dump.
+.TP
+.B --check-only
+Run the pipeline through resolve and check; suppress IR emission.
+Exit 0 if no errors.  Useful for editor integration.
+.SH DIAGNOSTICS
+.B flowc
+emits diagnostics in GCC-compatible format:
+.PP
+.RS
+.nf
+<path>:<line>:<col>: <severity>[<code>]: <message>
+.fi
+.RE
+.PP
+.I severity
+is one of
+.BR error ,
+.BR warning ,
+or
+.BR note .
+.I code
+is a stable identifier (e.g.
+.BR E122 ,
+.BR E140 )
+that does not change across versions; the message text may.
+The
+.B vscode-flow
+extension's problem matcher consumes this format directly.
+.SH EXIT STATUS
+.TP
+.B 0
+Compilation succeeded.
+.TP
+.B 1
+Compilation failed (one or more errors emitted).
+.TP
+.B 2
+Invocation error.
+.TP
+.B 3
+I/O error.
+.TP
+.B 4
+Internal compiler error.
+.SH ENVIRONMENT
+.TP
+.B SOURCE_DATE_EPOCH
+Controls the
+.B compiled_at
+field in the emitted IR.  The test driver pins it to zero so
+golden files stay stable across machines.
+.TP
+.B FLOWC_DIAGNOSTICS_COLOR
+Override color in textual diagnostics.  Accepts
+.BR always ,
+.BR never ,
+or
+.BR auto .
+.TP
+.B NO_COLOR
+Disable color in textual diagnostics when set to any non-empty
+value.
+.TP
+.B LC_NUMERIC
+Forced to
+.B "C"
+at startup so
+.B %g
+formatting produces the same bytes regardless of inherited
+locale.
+.SH FILES
+.TP
+.I *.flow
+Flow source files.
+.TP
+.I *.ir.json
+Flow IR documents.

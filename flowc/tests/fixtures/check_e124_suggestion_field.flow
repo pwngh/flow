@@ -1,0 +1,6 @@
+type Plan = { cost: int }
+
+flow choose([Plan]) -> [Plan] {
+  picked = it | select cst
+  picked
+}

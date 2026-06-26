@@ -1,0 +1,9 @@
+tool Plan(x: int) -> int
+  effect deterministic
+
+type Outcome =
+  | Plan { id: int }
+
+flow decide(string) -> Outcome {
+  Plan { id: 1 }
+}

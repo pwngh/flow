@@ -1,0 +1,55 @@
+{
+  "ir_version": "1.0",
+  "types": [
+    {
+      "name": "Decision",
+      "kind": "sum",
+      "variants": [
+        {
+          "name":   "Approve",
+          "fields": [
+            {"name": "limit", "type": "int"}
+          ]
+        },
+        {
+          "name":   "Deny",
+          "fields": [
+            {"name": "reason", "type": "string"}
+          ]
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name":   "classify",
+      "input":  [
+        {"name": "amount", "type": "int"}
+      ],
+      "output": "Decision",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name":   "adjudicate",
+      "params": [
+        {"name": "it", "type": "int", "implicit": true}
+      ],
+      "output":   "Decision",
+      "bindings": [],
+      "return": {
+        "kind": "call",
+        "tool": "classify",
+        "args": [
+          {
+            "field": "amount",
+            "value": {"kind": "path", "segments": ["it"]}
+          }
+        ]
+      }
+    }
+  ]
+}

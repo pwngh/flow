@@ -1,0 +1,297 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/incident_response.flow",
+  "types": [
+    {
+      "name": "IncidentAlert",
+      "kind": "record",
+      "fields": [
+        {"name": "alert_id", "type": "string"},
+        {"name": "service_id", "type": "string"},
+        {"name": "severity_hint", "type": "int"},
+        {"name": "message", "type": "string"},
+        {"name": "fired_at", "type": "int"}
+      ]
+    },
+    {
+      "name": "ContextBundle",
+      "kind": "record",
+      "fields": [
+        {"name": "recent_deploys", "type": "[string]"},
+        {"name": "related_incidents", "type": "[string]"},
+        {"name": "log_signals", "type": "[string]"},
+        {"name": "metric_signals", "type": "[string]"},
+        {"name": "dependency_status", "type": "string"},
+        {"name": "on_call", "type": "string"},
+        {"name": "partial", "type": "bool"},
+        {"name": "failed_sources", "type": "[string]"}
+      ]
+    },
+    {
+      "name": "Hypothesis",
+      "kind": "record",
+      "fields": [
+        {"name": "kind", "type": "string"},
+        {"name": "confidence", "type": "float"},
+        {"name": "suspect_artifact", "type": "string"},
+        {"name": "cited_signals", "type": "[string]"}
+      ]
+    },
+    {
+      "name": "RunbookSuggestion",
+      "kind": "record",
+      "fields": [
+        {"name": "runbook_id", "type": "string"},
+        {"name": "title", "type": "string"},
+        {"name": "confidence", "type": "float"},
+        {"name": "auto_executable", "type": "bool"}
+      ]
+    },
+    {
+      "name": "IncidentDecision",
+      "kind": "record",
+      "fields": [
+        {"name": "incident_id", "type": "string"},
+        {"name": "severity", "type": "int"},
+        {"name": "hypothesis", "type": "Hypothesis"},
+        {"name": "runbook", "type": "RunbookSuggestion"},
+        {"name": "channel_url", "type": "string"},
+        {"name": "commander", "type": "string"},
+        {"name": "kind", "type": "string"},
+        {"name": "partial", "type": "bool"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "dedupe_alert",
+      "input": [
+        {"name": "alert_id", "type": "string"},
+        {"name": "service_id", "type": "string"},
+        {"name": "fired_at", "type": "int"}
+      ],
+      "output": "bool",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "triage_severity",
+      "input": [
+        {"name": "alert", "type": "IncidentAlert"}
+      ],
+      "output": "int",
+      "effect": {
+        "level": "model",
+        "model": "triage-v1"
+      }
+    },
+    {
+      "name": "gather_context",
+      "input": [
+        {"name": "service_id", "type": "string"},
+        {"name": "fired_at", "type": "int"}
+      ],
+      "output": "ContextBundle",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "hypothesise",
+      "input": [
+        {"name": "alert", "type": "IncidentAlert"},
+        {"name": "context", "type": "ContextBundle"}
+      ],
+      "output": "Hypothesis",
+      "effect": {
+        "level": "model",
+        "model": "hypothesise-v1"
+      }
+    },
+    {
+      "name": "match_runbook",
+      "input": [
+        {"name": "hypothesis", "type": "Hypothesis"}
+      ],
+      "output": "RunbookSuggestion",
+      "effect": {
+        "level": "deterministic"
+      }
+    },
+    {
+      "name": "create_incident",
+      "input": [
+        {"name": "alert", "type": "IncidentAlert"},
+        {"name": "severity", "type": "int"},
+        {"name": "hypothesis", "type": "Hypothesis"},
+        {"name": "runbook", "type": "RunbookSuggestion"}
+      ],
+      "output": "IncidentDecision",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "respond_to_alert",
+      "params": [
+        {"name": "it", "type": "IncidentAlert", "implicit": true}
+      ],
+      "output": "IncidentDecision",
+      "bindings": [
+        {
+          "name": "is_duplicate",
+          "expr": {
+            "kind": "call",
+            "tool": "dedupe_alert",
+            "args": [
+              {
+                "field": "alert_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "alert_id"]
+                }
+              },
+              {
+                "field": "service_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "service_id"]
+                }
+              },
+              {
+                "field": "fired_at",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "fired_at"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "severity",
+          "expr": {
+            "kind": "call",
+            "tool": "triage_severity",
+            "args": [
+              {
+                "field": "alert",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "context",
+          "expr": {
+            "kind": "call",
+            "tool": "gather_context",
+            "args": [
+              {
+                "field": "service_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "service_id"]
+                }
+              },
+              {
+                "field": "fired_at",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it", "fired_at"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "hypothesis",
+          "expr": {
+            "kind": "call",
+            "tool": "hypothesise",
+            "args": [
+              {
+                "field": "alert",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "context",
+                "value": {
+                  "kind": "path",
+                  "segments": ["context"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "runbook",
+          "expr": {
+            "kind": "call",
+            "tool": "match_runbook",
+            "args": [
+              {
+                "field": "hypothesis",
+                "value": {
+                  "kind": "path",
+                  "segments": ["hypothesis"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "decision",
+          "expr": {
+            "kind": "call",
+            "tool": "create_incident",
+            "args": [
+              {
+                "field": "alert",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "field": "severity",
+                "value": {
+                  "kind": "path",
+                  "segments": ["severity"]
+                }
+              },
+              {
+                "field": "hypothesis",
+                "value": {
+                  "kind": "path",
+                  "segments": ["hypothesis"]
+                }
+              },
+              {
+                "field": "runbook",
+                "value": {
+                  "kind": "path",
+                  "segments": ["runbook"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["decision"]
+      }
+    }
+  ]
+}

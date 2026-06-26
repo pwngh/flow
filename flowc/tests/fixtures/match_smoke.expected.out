@@ -1,0 +1,98 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/match_smoke.flow",
+  "types": [
+    {
+      "name": "Hypothesis",
+      "kind": "sum",
+      "variants": [
+        {
+          "name": "DeployCaused",
+          "fields": [
+            {"name": "suspect_deploy_id", "type": "string"}
+          ]
+        },
+        {
+          "name": "CapacityIssue",
+          "fields": [
+            {"name": "resource", "type": "string"}
+          ]
+        },
+        {
+          "name": "Unknown",
+          "fields": [
+            {"name": "confidence", "type": "float"}
+          ]
+        }
+      ]
+    }
+  ],
+  "tools": [],
+  "flows": [
+    {
+      "name": "describe",
+      "params": [
+        {"name": "it", "type": "string", "implicit": true}
+      ],
+      "output": "string",
+      "bindings": [
+        {
+          "name": "h",
+          "expr": {
+            "kind": "construct_variant",
+            "type": "Hypothesis",
+            "variant": "DeployCaused",
+            "fields": [
+              {
+                "name": "suspect_deploy_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "outcome",
+          "expr": {
+            "kind": "match",
+            "scrutinee": {
+              "kind": "path",
+              "segments": ["h"]
+            },
+            "scrutinee_type": "Hypothesis",
+            "arms": [
+              {
+                "pattern": {"kind": "variant", "variant": "DeployCaused", "binder": "d"},
+                "body": {
+                  "kind": "path",
+                  "segments": ["d", "suspect_deploy_id"]
+                }
+              },
+              {
+                "pattern": {"kind": "variant", "variant": "CapacityIssue", "binder": "_"},
+                "body": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              },
+              {
+                "pattern": {"kind": "wildcard"},
+                "body": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["outcome"]
+      }
+    }
+  ]
+}

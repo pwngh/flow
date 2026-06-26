@@ -1,0 +1,281 @@
+#!/bin/sh
+#
+# configure - probe the local environment and generate config.mk.
+#
+# Conformant to POSIX.1-2008 shell. Run before `make`. The Makefile
+# does NOT invoke configure; configure is a manual step performed once
+# after checkout and again whenever the build environment changes.
+#
+# This script follows the layered model described in Joe Nelson's
+# "Tips for stable and portable software": probe what the toolchain
+# actually supports rather than guess from `uname`.
+
+set -u  # treat use of unset variables as an error
+
+# ---------------------------------------------------------------------------
+# Toolchain overrides, in the autoconf convention:
+#
+#     CC=clang CFLAGS=-O2 YACC=/opt/homebrew/opt/bison/bin/bison ./configure
+#
+# Whatever the probes below accept is recorded verbatim in config.mk,
+# so the tools `make` runs are exactly the tools configure probed —
+# the result must not depend on PATH ordering at build time.
+# ---------------------------------------------------------------------------
+CC=${CC:-cc}
+CFLAGS=${CFLAGS:-}
+CPPFLAGS=${CPPFLAGS:-}
+LDFLAGS=${LDFLAGS:-}
+LEX=${LEX:-}
+YACC=${YACC:-bison}
+
+# ---------------------------------------------------------------------------
+# compiles() — probe whether a C source snippet compiles.
+#
+# Usage: compiles "<extra cc flags>" "<C source>"
+# Returns 0 on success, non-zero on failure.
+# Writes nothing to stdout/stderr on either path.
+# ---------------------------------------------------------------------------
+compiles() {
+    _stage=`mktemp -d 2>/dev/null` || {
+        echo 'configure: error: mktemp -d failed' >&2
+        exit 1
+    }
+    echo "$2" > "$_stage/test.c"
+    "$CC" -Werror $CFLAGS $CPPFLAGS $1 $LDFLAGS -o "$_stage/test" "$_stage/test.c" >/dev/null 2>&1
+    _rc=$?
+    rm -rf "$_stage"
+    return $_rc
+}
+
+# ---------------------------------------------------------------------------
+# Required toolchain
+# ---------------------------------------------------------------------------
+
+echo 'configure: probing toolchain...'
+
+# C compiler
+if ! command -v "$CC" >/dev/null 2>&1; then
+    echo "configure: error: no \`$CC\` on PATH (set CC=... to override)" >&2
+    exit 1
+fi
+
+# A C99-capable compiler that accepts the strict flags we use.
+if ! compiles "-std=c99 -pedantic" '
+#include <stddef.h>
+int main(void) {
+    for (size_t i = 0; i < 1; i++) { (void)i; }  /* C99: decl in for */
+    return 0;
+}
+'; then
+    echo "configure: error: $CC does not accept -std=c99 -pedantic" >&2
+    exit 1
+fi
+echo "  cc:           ok ($CC, C99 + -pedantic)"
+
+# POSIX.1-2008 feature macro.
+#
+# The compiler-as-a-library mode (src/api.c) requires fmemopen and
+# open_memstream — both standardized in Issue 7 (POSIX.1-2008). Both
+# were existing practice on every target libc years before the spec
+# caught up, which is why the 2008 issue is the right floor here.
+if ! compiles "-std=c99 -pedantic -D_POSIX_C_SOURCE=200809L" '
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+int main(void) {
+    /* ssize_t comes from POSIX, not C99. If this compiles we have
+       a usable POSIX.1-2008 environment. */
+    ssize_t n = 0;
+    (void)n;
+    return 0;
+}
+'; then
+    echo 'configure: error: cannot compile with _POSIX_C_SOURCE=200809L' >&2
+    exit 1
+fi
+echo '  posix:        ok (POSIX.1-2008)'
+
+# fmemopen — required by the library-mode compile entry points. The
+# CLI binary never calls it directly, but every translation unit
+# linked into libflowc.a shares the same feature-test macro and the
+# library is the load-bearing artifact, so we make this a hard probe
+# rather than a runtime fallback.
+if ! compiles "-std=c99 -pedantic -D_POSIX_C_SOURCE=200809L" '
+#include <stdio.h>
+int main(void) {
+    char buf[1] = { 0 };
+    FILE *fp = fmemopen(buf, sizeof buf, "r");
+    (void)fp;
+    return 0;
+}
+'; then
+    echo 'configure: error: fmemopen is required (POSIX.1-2008).' >&2
+    exit 1
+fi
+echo '  fmemopen:     ok'
+
+# open_memstream — required by the library-mode dump/IR entry points
+# for capturing output into a heap-allocated buffer.
+if ! compiles "-std=c99 -pedantic -D_POSIX_C_SOURCE=200809L" '
+#include <stdio.h>
+int main(void) {
+    char  *buf = NULL;
+    size_t len = 0;
+    FILE  *fp  = open_memstream(&buf, &len);
+    (void)fp;
+    return 0;
+}
+'; then
+    echo 'configure: error: open_memstream is required (POSIX.1-2008).' >&2
+    exit 1
+fi
+echo '  open_memstream: ok'
+
+# lex / flex
+#
+# src/lex.l is flex-only: it uses `%option noyywrap nounput noinput`
+# and hexadecimal escapes like [\x80-\xff], and the Makefile invokes
+# `$(LEX) -o` — POSIX lex has no -o option (its output name is
+# hardwired to lex.yy.c). The earlier version of this probe accepted
+# any `lex` on PATH, which was the same lie the old yacc probe told:
+# the build would fail at the first flex-only construct. We now probe
+# the actual capability with a minimal scanner that uses the same
+# constructs, invoked the same way the Makefile invokes it.
+
+lex_builds_flex_input() {
+    _stage=`mktemp -d 2>/dev/null` || return 1
+    cat > "$_stage/probe.l" <<'EOF'
+%option noyywrap nounput noinput
+%%
+[\x80-\xff]  { }
+.|\n         { }
+%%
+EOF
+    "$1" -o "$_stage/probe.yy.c" "$_stage/probe.l" >/dev/null 2>&1
+    _rc=$?
+    rm -rf "$_stage"
+    return $_rc
+}
+
+if [ -n "$LEX" ]; then
+    _lex_candidates=$LEX
+else
+    _lex_candidates='flex lex'
+fi
+LEX_PROG=
+for _cand in $_lex_candidates; do
+    if command -v "$_cand" >/dev/null 2>&1 && lex_builds_flex_input "$_cand"; then
+        LEX_PROG=`command -v "$_cand"`
+        break
+    fi
+done
+if [ -z "$LEX_PROG" ]; then
+    echo "configure: error: no usable flex found (tried: $_lex_candidates)" >&2
+    echo '  src/lex.l requires flex; POSIX lex cannot build it (no -o' >&2
+    echo '  option, no %option directive). Install flex, or set' >&2
+    echo '  LEX=/path/to/flex and re-run ./configure.' >&2
+    exit 1
+fi
+echo "  lex:          ok ($LEX_PROG)"
+
+# bison
+#
+# The grammar in src/parse.y uses Bison-specific features that POSIX
+# yacc and pre-3.0 Bison do not provide:
+#
+#   - %require "3.0"           (the directive itself, and the floor)
+#   - %expect 23               (23 expected shift/reduce conflicts)
+#   - %locations with a custom YYLTYPE
+#   - %union { ... }           (classic semantic value union block)
+#
+# The earlier version of this probe accepted any `yacc` on PATH, which
+# was a lie: the build would fail at the first Bison directive. We now
+# probe the actual capability with a minimal `%require "3.0"` grammar,
+# in the same spirit as the compiles() helper above for C: invoke the
+# candidate program on a real input and check the exit code. The
+# candidate is $YACC if set (so a mac with a pre-3.0 /usr/bin/bison
+# can say YACC=/opt/homebrew/opt/bison/bin/bison ./configure), and the
+# accepted candidate is recorded in config.mk as an absolute path so
+# `make` runs the bison configure probed, not whatever a later
+# shell's PATH happens to resolve.
+
+bison_builds_require_3() {
+    _stage=`mktemp -d 2>/dev/null` || return 1
+    cat > "$_stage/probe.y" <<'EOF'
+%require "3.0"
+%{
+%}
+%token T
+%%
+prog: T ;
+%%
+EOF
+    "$YACC" -o "$_stage/probe.tab.c" "$_stage/probe.y" >/dev/null 2>&1
+    _rc=$?
+    rm -rf "$_stage"
+    return $_rc
+}
+
+if ! command -v "$YACC" >/dev/null 2>&1; then
+    echo "configure: error: \`$YACC\` not on PATH" >&2
+    echo '  flowc requires GNU Bison >= 3.0. POSIX yacc and byacc cannot' >&2
+    echo '  build src/parse.y; see the comment in ./configure for details.' >&2
+    echo '  Set YACC=/path/to/bison to point at a specific binary.' >&2
+    exit 1
+fi
+if ! bison_builds_require_3; then
+    echo "configure: error: $YACC is present but too old (need >= 3.0)" >&2
+    echo "  Check \`$YACC --version\`. Upgrade via your package manager," >&2
+    echo '  or set YACC=/path/to/bison (e.g. Homebrew bison) and re-run.' >&2
+    exit 1
+fi
+YACC_PROG=`command -v "$YACC"`
+echo "  bison:        ok (>= 3.0, $YACC_PROG)"
+
+# isatty() for color detection.
+if compiles "-std=c99 -pedantic -D_POSIX_C_SOURCE=200809L" '
+#include <unistd.h>
+int main(void) { return isatty(2); }
+'; then
+    HAVE_ISATTY=1
+    echo '  isatty:       ok'
+else
+    HAVE_ISATTY=0
+    echo '  isatty:       absent (diagnostics will not be colored)'
+fi
+
+# ---------------------------------------------------------------------------
+# Write config.mk
+# ---------------------------------------------------------------------------
+
+cat > config.mk <<EOF
+# config.mk
+#
+# GENERATED by ./configure. Re-run ./configure to regenerate.
+# Do not edit by hand: edits are lost on re-configure.
+
+CC      = $CC
+LEX     = $LEX_PROG
+YACC    = $YACC_PROG
+
+# Strict flags applied to our own code, followed by any CFLAGS /
+# CPPFLAGS / LDFLAGS given to configure. -Werror is on because in a
+# small codebase every warning indicates something to fix. Capability
+# macros discovered by the probes (HAVE_ISATTY) are folded into the
+# single CONFIG_CPPFLAGS assignment: POSIX make has no +=, and the
+# Makefile pins .POSIX:.
+CONFIG_CFLAGS   = -std=c99 -pedantic -Wall -Wextra -Werror $CFLAGS
+CONFIG_CPPFLAGS = -D_POSIX_C_SOURCE=200809L -Isrc -DHAVE_ISATTY=$HAVE_ISATTY $CPPFLAGS
+CONFIG_LDFLAGS  = $LDFLAGS
+CONFIG_LDLIBS   =
+
+# Relaxed flags for flex/bison-generated code, which we do not own and
+# which routinely trips strict warning settings. -std=c99 is still
+# enforced; warnings are not promoted to errors.
+GEN_CFLAGS      = -std=c99
+EOF
+
+echo 'configure: wrote config.mk'
+echo 'configure: run `make` to build flowc.'

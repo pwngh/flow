@@ -1,0 +1,1 @@
+tests/fixtures/missing_flow_extension.txt:1:1: warning[W101]: input filename 'tests/fixtures/missing_flow_extension.txt' does not end in '.flow'

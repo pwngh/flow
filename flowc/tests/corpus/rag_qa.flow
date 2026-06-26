@@ -1,0 +1,307 @@
+# rag_qa.flow — corpus flow #13 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: LangChain RAG cookbook (hybrid BM25 + vector retrieval,
+# ContextualCompressionRetriever, CrossEncoderReranker, parent-document
+# pattern). Perplexity AI architecture teardowns (six-stage pipeline:
+# query parse → hybrid retrieve → three-tier rerank → prompt assembly
+# with citations → LLM synthesis bound by retrieved evidence; ~0.7
+# quality threshold with fail-safe re-query rather than serving weak
+# citations; source diversity / authority / recency as explicit
+# reranker signals).
+#
+# A RAG-QA workflow has this shape:
+#
+#   parse query    intent detection, sub-topic extraction, filters
+#                  may emit multiple sub-queries
+#
+#   retrieve       BM25 (keyword)  \
+#                  vector (dense)   } parallel; high-recall pull, ~100s
+#                  (optional) web   /  candidates per leg
+#
+#   tier-1 fuse    union hits, dedupe by source_id
+#
+#   tier-2 rerank  cross-encoder over query+document pairs
+#                  produces precision-weighted scores
+#
+#   tier-3 rerank  ML reranker applies signal weights:
+#                    recency boost     score *= decay(age, τ)
+#                    authority boost   score *= domain_weight
+#                    diversity penalty score *= 1/(1+same_domain_count)
+#                    sub-topic match   score *= sub_topic_coverage
+#                  collapse to top-N
+#
+#   quality gate   if max(scores) < 0.7:
+#                    re-query with rewrite (one retry, not unbounded)
+#                    if still below threshold → return "no good answer"
+#                  Perplexity: "fail-safe that discards all results and
+#                  re-queries rather than serving weak citations."
+#
+#   prompt build   structured prompt with ranked excerpts inline and
+#                  citation markers — LLM synthesis is CONSTRAINED to
+#                  the assembled evidence, not free generation
+#
+#   synthesize     LLM produces answer with [n]-style citation markers
+#
+#   validate       every citation marker must resolve to a retrieved
+#                  source; hallucinated citations → drop or escalate
+#
+# Three load-bearing facts:
+#
+#   (a) Citation source types are STRUCTURALLY DIFFERENT. A web page
+#       has {url, domain, published_at}; a PDF chunk has {doc_id,
+#       page_number, chunk_position}; a knowledge-graph entity has
+#       {entity_id, relations, confidence}. Citation rendering
+#       differs per source type ("From paper X, p.4" vs "From
+#       web.example.com" vs "Entity Y has relation Z"). LangChain's
+#       Document(page_content, metadata: dict) is the open-dict
+#       workaround — kicks the type discipline out of the model.
+#       This is the THIRD corpus occurrence of #11 sum types (after
+#       #10 dispute evidence, #12 deploy gate results); per the
+#       rubric's promotion rule, #11 now clears the bar.
+#
+#   (b) Score arithmetic IS the rerank logic. Hybrid fusion is
+#       `α·bm25 + β·vector`; recency boost is `score · exp(-age/τ)`;
+#       authority is `score · domain_weight`; diversity penalty is
+#       `score / (1 + same_domain_count)`. The language has no
+#       arithmetic anywhere. This is the SECOND corpus occurrence of
+#       #8 string/numeric expression ops (first at flow #11 — time
+#       arithmetic for scheduling). Two distinct domains needing
+#       expression ops; the gap is general, not domain-specific.
+#
+#   (c) The retrieve→rerank→generate→validate cycle is fundamentally
+#       map-and-reduce on a list of candidates, with size collapsing
+#       from ~100s → ~10s → ~5 → 1 answer text. Without #4 (loops)
+#       the per-candidate scoring lives inside the rerank tool; the
+#       per-citation validation lives inside the validate tool. The
+#       source describes the *stages* but not the *computation*
+#       inside each stage.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow answer(Question) -> Answer {
+#     # 1. parse query into sub-queries (variable arity):
+#     subqueries = parse_query(it.query)            # [SubQuery]
+#
+#     # 2. parallel hybrid retrieve over each sub-query:
+#     all_hits = flatmap(subqueries, sq -> {
+#       vec = retrieve_vectors(sq.text, it.top_k, it.namespace)
+#       kw  = retrieve_keywords(sq.text, it.top_k, it.namespace)
+#       concat(vec, kw)
+#     })
+#
+#     # 3. dedupe + fuse:
+#     unique = dedupe_by(all_hits, h -> h.id)       # ~100s sources
+#
+#     # 4. cross-encoder rerank (precision):
+#     scored = map(unique, h -> {
+#       cross_score = cross_encoder(it.query, h.text)
+#       h with { score: 0.5*h.score + 0.5*cross_score }
+#     })
+#
+#     # 5. ML rerank with multi-signal boosts (expression ops!):
+#     boosted = map(scored, h -> {
+#       recency  = exp(-(now - h.published_at) / decay_tau)
+#       auth     = domain_weight(h.domain)
+#       div_pen  = 1.0 / (1.0 + count_same_domain(scored, h.domain))
+#       h with { score: h.score * recency * auth * div_pen }
+#     })
+#
+#     ranked = boosted | rank score desc | take top_n
+#
+#     # 6. quality gate with bounded retry:
+#     if max_score(ranked) < 0.7:
+#       rewritten = rewrite_query(it.query)
+#       if rewritten == it.query:           # no rewrite available
+#         return Answer { text: "I don't have enough information ...",
+#                          citations: [], confidence: 0.0 }
+#       return answer(Question { ... with: query = rewritten })   # recurse 1x
+#
+#     # 7. prompt build + synthesize:
+#     prompt = assemble_prompt(it.query, ranked)
+#     draft  = synthesize_answer(prompt)
+#
+#     # 8. citation validation:
+#     valid = filter(draft.citations, c ->
+#       any(ranked, r -> r.id == c.source_id)
+#     )
+#     if size(valid) < size(draft.citations):
+#       # hallucinated citation — drop or escalate
+#       cleaned = clean_hallucinations(draft, ranked)
+#       return cleaned
+#
+#     Answer { text: draft.text, citations: valid,
+#              confidence: max_score(ranked), sources_used: ranked }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #2   parallel fan-out + join — predicted. BM25 and
+#                 vector retrieval per sub-query are independent; in
+#                 a Perplexity-style architecture web retrieval is
+#                 also a parallel third leg.
+#
+#   blocked: #4   loops / fold over list — central. Map over sub-
+#                 queries; map over candidates for cross-encoder
+#                 scoring; map for ML rerank boosts; filter for
+#                 citation validation. Five distinct uses, all of
+#                 candidate-list size (~100s of items).
+#
+#   blocked: #5   conditional binding — re-query gate; web-search
+#                 only if local insufficient; hallucination cleanup
+#                 only if validation found discrepancies.
+#
+#   blocked: #7   sub-flow composition — parse_query, retrieve,
+#                 cross-encoder rerank, ML rerank, prompt-build,
+#                 synthesize, validate are SEVEN sub-flows in
+#                 production. LangChain explicitly names them as
+#                 composable Retriever / Reranker / Generator
+#                 components.
+#
+#   blocked: #8   string / numeric EXPRESSION OPS — second corpus
+#                 occurrence (first: flow #11 scheduling time
+#                 arithmetic). The rerank logic IS arithmetic.
+#                 Hybrid score fusion (α·bm25 + β·vector), recency
+#                 decay (exp), authority weighting, diversity
+#                 penalty — every one of these is unwritable. Today
+#                 they must hide inside a `rerank` tool that the
+#                 source cannot inspect. Two distinct domains
+#                 needing expression ops in 13 flows is sufficient
+#                 to argue this is a general gap, not a one-off.
+#
+#   blocked: #10  optional types — citations [] on no-good-answer
+#                 fallback; url only on web sources; page_number
+#                 only on PDF sources; confidence absent on dropped-
+#                 citation cleanup path.
+#
+#   blocked: #11  sum types / variants — THIRD CORPUS OCCURRENCE
+#                 (flow #10 dispute evidence, flow #12 gate results,
+#                 now flow #13 source types). The rubric's
+#                 promotion rule says three occurrences clears the
+#                 bar. PROMOTED to a confirmed load-bearing gap.
+#                 The fat-record workaround (Source with url empty
+#                 for non-web, page empty for non-PDF, etc.) loses
+#                 the invariant that source-type determines which
+#                 fields are populated.
+#
+#   blocked: #12  time / scheduling — 12e time-as-data again
+#                 (second occurrence after flow #11 scheduling).
+#                 Recency boost reads `now - h.published_at` and
+#                 applies an exponential decay. Both the
+#                 subtraction and the exponential need #8
+#                 expression ops; the `now` primitive is a #12
+#                 question. Confirms 12e (time-as-data, distinct
+#                 from time-as-flow-control 12a/b/c) is a real
+#                 sub-shape.
+#
+#   blocked: #14  lazy / short-circuit evaluation — eighth
+#                 occurrence. Three forms here: skip cross-encoder
+#                 if top BM25+vector match > 0.95 (cost); skip web
+#                 search if local retrieval already strong (cost);
+#                 skip synthesis if quality gate failed without a
+#                 rewrite (correctness).
+#
+#   blocked: #15  list-literal construction — sixth occurrence.
+#                 Sub-query list from query parse; empty citation
+#                 list on fallback; signal-weight list passed to
+#                 reranker.
+#
+#   blocked: #16  aggregation primitives — fourth occurrence (just
+#                 promoted at flow #12). concat over sub-query
+#                 results; dedupe_by id; group_by domain for
+#                 diversity penalty; max for quality gate.
+#
+#   blocked: #3   in-source error handling — vector DB unavailable
+#                 → fall back to keyword-only; web search timeout
+#                 → proceed without web tier; cross-encoder
+#                 inference error → retry or skip rerank.
+#                 Production systems explicitly degrade rather than
+#                 fail.
+#
+#   blocked: #13  Other: no string literals — source-kind enum,
+#                 retrieval-method enum, "I don't have enough
+#                 information" fallback text. Recurring.
+#
+#   shippable: N — the workflow below collapses six discrete
+#                  Perplexity-style stages into two tools (rerank +
+#                  synthesize) plus the hybrid retrieve. The
+#                  signal-weighted reranker, the quality-gate
+#                  retry, the citation validation, the
+#                  hallucination cleanup, the sub-query fan-out are
+#                  all invisible. An ML-eng team running this
+#                  source would learn nothing about how their RAG
+#                  system works from reading it.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: hybrid retrieve (serial), opaque rerank, opaque
+# synthesize. The source type is the fat-record workaround for
+# #11 — Source carries url + page + domain + published_at fields
+# regardless of whether they apply.
+
+type Question  = { query:           string,
+                 top_k:           int,
+                 top_n:           int,
+                 namespace:       string,
+                 recency_weight:  float }
+
+type Source    = { id:            string,
+                 kind:          string,
+                 text:          string,
+                 score:         float,
+                 url:           string,
+                 domain:        string,
+                 page:          int,
+                 published_at:  int,
+                 doc_id:        string,
+                 entity_id:     string }
+
+type Citation  = { source_id:     string,
+                 text_position: int,
+                 quote:         string }
+
+type Answer    = { text:          string,
+                 citations:     [Citation],
+                 confidence:    float,
+                 sources_used:  [Source] }
+
+tool retrieve_vectors    (query:     string,
+                          top_k:     int,
+                          namespace: string)        -> [Source]
+  effect deterministic
+
+tool retrieve_keywords   (query:     string,
+                          top_k:     int,
+                          namespace: string)        -> [Source]
+  effect deterministic
+
+tool rerank              (query:    string,
+                          vec_hits: [Source],
+                          kw_hits:  [Source],
+                          top_n:    int)            -> [Source]
+  effect model("rerank-v1")
+
+tool generate_answer     (query:   string,
+                          sources: [Source])        -> Answer
+  effect model("answer-v1")
+
+flow answer(Question) -> Answer {
+  # awkward: two retrievals serialised — slowest leg + slowest leg
+  # rather than max(slowest leg). Counts toward #2.
+  vec_hits = retrieve_vectors(it.query, it.top_k, it.namespace)
+  kw_hits  = retrieve_keywords(it.query, it.top_k, it.namespace)
+
+  # workaround: 3-layer rerank (fuse + cross-encoder + ML signal
+  # boosts) + diversity check + quality gate + bounded re-query
+  # collapse into one tool. Score arithmetic, recency decay, domain
+  # authority, diversity penalty — none expressible at source.
+  # Counts toward #4, #5, #7, #8, #11, #12, #14, #16.
+  reranked = rerank(it.query, vec_hits, kw_hits, it.top_n)
+
+  # workaround: prompt assembly + LLM synthesis + citation
+  # validation + hallucination cleanup collapse into one tool.
+  result = generate_answer(it.query, reranked)
+
+  result
+}

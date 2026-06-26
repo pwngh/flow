@@ -1,0 +1,9 @@
+type Plan = { id: string }
+
+type Outcome =
+  | Approved { plan: Plan }
+  | Plan { id: string }
+
+flow decide(string) -> Outcome {
+  Approved { plan: Plan { id: it } }
+}

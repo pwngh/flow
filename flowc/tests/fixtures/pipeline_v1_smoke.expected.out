@@ -1,0 +1,92 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/pipeline_v1_smoke.flow",
+  "types": [
+    {
+      "name": "Plan",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "cost", "type": "int"},
+        {"name": "score", "type": "int"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "fetch_plans",
+      "input": [
+        {"name": "uid", "type": "string"}
+      ],
+      "output": "[Plan]",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "tier_one",
+      "params": [
+        {"name": "uid", "type": "string", "implicit": false},
+        {"name": "extra", "type": "[Plan]", "implicit": false}
+      ],
+      "output": "[int]",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_plans",
+          "args": [
+            {
+              "field": "uid",
+              "value": {
+                "kind": "path",
+                "segments": ["uid"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "concat",
+            "op": "concat",
+            "other": {
+              "kind": "path",
+              "segments": ["extra"]
+            }
+          },
+          {
+            "kind": "dedupe",
+            "op": "dedupe_by",
+            "key": {
+              "kind": "path",
+              "segments": ["id"]
+            }
+          },
+          {
+            "kind": "sort",
+            "op": "rank",
+            "by": "score",
+            "direction": "desc"
+          },
+          {
+            "kind": "take",
+            "op": "take",
+            "count": 5
+          },
+          {
+            "kind": "select",
+            "op": "select",
+            "body": {
+              "kind": "path",
+              "segments": ["cost"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

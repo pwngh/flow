@@ -1,0 +1,50 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "2026-06-15T23:22:55Z",
+  "source_file": "bindings/python/tests/fixtures/gate.flow",
+  "types": [
+    {
+      "name": "Approval",
+      "kind": "record",
+      "fields": [
+        {"name": "approver", "type": "string"},
+        {"name": "ok", "type": "bool"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "await_human_approval",
+      "input": [
+        {"name": "prompt", "type": "string"}
+      ],
+      "output": "Approval",
+      "effect": {
+        "level": "mutation"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "gate",
+      "params": [
+        {"name": "it", "type": "string", "implicit": true}
+      ],
+      "output": "Approval",
+      "bindings": [],
+      "return": {
+        "kind": "call",
+        "tool": "await_human_approval",
+        "args": [
+          {
+            "field": "prompt",
+            "value": {
+              "kind": "path",
+              "segments": ["it"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,213 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/per_row_match_smoke.flow",
+  "types": [
+    {
+      "name": "Status",
+      "kind": "sum",
+      "variants": [
+        {
+          "name": "Active",
+          "fields": [
+            {"name": "since", "type": "int"}
+          ]
+        },
+        {
+          "name": "Banned",
+          "fields": [
+            {"name": "reason", "type": "string"}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "User",
+      "kind": "record",
+      "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "status", "type": "Status"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "fetch_users",
+      "input": [
+        {"name": "team", "type": "string"}
+      ],
+      "output": "[User]",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "active_since",
+      "params": [
+        {"name": "team", "type": "string", "implicit": false}
+      ],
+      "output": "[int]",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_users",
+          "args": [
+            {
+              "field": "team",
+              "value": {
+                "kind": "path",
+                "segments": ["team"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "select",
+            "op": "select",
+            "body": {
+              "kind": "match",
+              "scrutinee": {
+                "kind": "path",
+                "segments": ["status"]
+              },
+              "scrutinee_type": "Status",
+              "arms": [
+                {
+                  "pattern": {"kind": "variant", "variant": "Active", "binder": "a"},
+                  "body": {
+                    "kind": "path",
+                    "segments": ["a", "since"]
+                  }
+                },
+                {
+                  "pattern": {"kind": "wildcard", "binder": "other"},
+                  "body": {
+                    "kind": "literal",
+                    "value": 0,
+                    "type": "int"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "dedup_since",
+      "params": [
+        {"name": "team", "type": "string", "implicit": false}
+      ],
+      "output": "[User]",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_users",
+          "args": [
+            {
+              "field": "team",
+              "value": {
+                "kind": "path",
+                "segments": ["team"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "dedupe",
+            "op": "dedupe_by",
+            "key": {
+              "kind": "match",
+              "scrutinee": {
+                "kind": "path",
+                "segments": ["status"]
+              },
+              "scrutinee_type": "Status",
+              "arms": [
+                {
+                  "pattern": {"kind": "variant", "variant": "Active", "binder": "a"},
+                  "body": {
+                    "kind": "path",
+                    "segments": ["a", "since"]
+                  }
+                },
+                {
+                  "pattern": {"kind": "wildcard", "binder": "other"},
+                  "body": {
+                    "kind": "literal",
+                    "value": 0,
+                    "type": "int"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "any_banned",
+      "params": [
+        {"name": "team", "type": "string", "implicit": false}
+      ],
+      "output": "bool",
+      "bindings": [],
+      "return": {
+        "kind": "pipeline",
+        "source": {
+          "kind": "call",
+          "tool": "fetch_users",
+          "args": [
+            {
+              "field": "team",
+              "value": {
+                "kind": "path",
+                "segments": ["team"]
+              }
+            }
+          ]
+        },
+        "stages": [
+          {
+            "kind": "terminal",
+            "op": "any",
+            "predicate": {
+              "kind": "match",
+              "scrutinee": {
+                "kind": "path",
+                "segments": ["status"]
+              },
+              "scrutinee_type": "Status",
+              "arms": [
+                {
+                  "pattern": {"kind": "variant", "variant": "Banned", "binder": "b"},
+                  "body": {
+                    "kind": "literal",
+                    "value": true,
+                    "type": "bool"
+                  }
+                },
+                {
+                  "pattern": {"kind": "wildcard", "binder": "other"},
+                  "body": {
+                    "kind": "literal",
+                    "value": false,
+                    "type": "bool"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

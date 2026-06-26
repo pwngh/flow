@@ -1,0 +1,5 @@
+type Bucket = { items: [int], tags: [string] }
+
+flow empty_bucket(unused: int) -> Bucket {
+  Bucket { items: [], tags: [] }
+}

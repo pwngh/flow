@@ -1,0 +1,301 @@
+.TH FLOW-TRACE 5 "May 2026" "" "Flow Manual"
+.SH NAME
+flow-trace \- the Flow trace directory layout
+.SH DESCRIPTION
+A Flow trace is the on-disk record of one flow execution: every
+node's inputs, intermediate values, model identities, outputs,
+timing, retries, and effect-level metadata.  The trace is the
+artifact compliance reviewers and auditors consult to reconstruct
+why a given decision came out the way it did, and the input that
+.B "flowd replay"
+and
+.B "flowd diff"
+operate on.
+.PP
+The format is JSON throughout.  It is designed for additive
+evolution: adding optional fields to any record is safe;
+removing or renaming fields requires explicit migration.
+.SH LAYOUT
+One execution produces one directory:
+.PP
+.RS
+.nf
+traces/<flow_name>/<execution_id>/
+  manifest.json
+  nodes/
+    <node_id>.json
+    ...
+  values/
+    <sha256>.json       \(em values above the inline threshold
+    ...
+  audit.log             \(em append-only access records
+.fi
+.RE
+.SH MANIFEST
+.I manifest.json
+is the entry point for any reader.  Required fields:
+.PP
+.RS
+.nf
+{
+  "trace_version":  "1.0",
+  "execution_id":   "exec_2026_05_26_a3f2b1",
+  "flow":           "adjudicate",
+  "ir_version":     "1.0",
+  "ir_hash":        "sha256:91c4...",
+  "input_hash":     "sha256:8b2e...",
+  "output_hash":    "sha256:e0a1...",
+  "started_at":     "2026-05-26T12:00:00.123Z",
+  "ended_at":       "2026-05-26T12:00:03.456Z",
+  "elapsed_ms":     3333,
+  "status":         "complete",
+  "node_count":     5,
+  "model_calls":    [ ... ],
+  "budget_summary": {"tokens_in": 14, "tokens_out": 8, "cost_cents": 0.0000}
+}
+.fi
+.PP
+.B budget_summary
+totals the provider-reported usage across every
+.B model_call
+in the run.
+.B model_calls
+entries carry the same per-call
+.BR tokens_in ,
+.BR tokens_out ,
+and
+.B cost_cents
+when the provider adapter reports them (0 otherwise).
+.RE
+.PP
+.B status
+is one of
+.BR complete ,
+.BR failed ,
+or
+.BR suspended .
+.SH NODE RECORDS
+Each
+.I nodes/<node_id>.json
+records one node's execution:
+.PP
+.RS
+.nf
+{
+  "node_id":      "n3",
+  "node_kind":    "model_call",
+  "effect_level": "model",
+  "model":        "risk-v1",
+  "started_at":   "2026-05-26T12:00:01.200Z",
+  "ended_at":     "2026-05-26T12:00:02.800Z",
+  "elapsed_ms":   1600,
+  "invocations":  [
+    {"inputs": { ... }, "output": { ... }}
+  ],
+  "retries":      [],
+  "errors":       null
+}
+.fi
+.RE
+.PP
+The
+.B invocations
+array holds one record per row of input the node processed.
+A direct tool or model call produces a single invocation; each
+record carries its own
+.B inputs
+and
+.BR output .
+An
+.B input
+or
+.B output
+node omits
+.B inputs
+and records only the produced
+.BR output .
+.PP
+.B node_kind
+is one of:
+.BR input ,
+.BR output ,
+.BR tool_call ,
+.BR model_call ,
+.BR subflow_call ,
+or
+.BR suspension .
+The
+.B input
+and
+.B output
+nodes are synthesized at the boundaries of every execution;
+.B tool_call
+and
+.B model_call
+record tool invocations (a tool with
+.B "effect model(...)"
+becomes a
+.BR model_call );
+.B subflow_call
+records a call into another flow; and
+.B suspension
+records a pause point such as
+.BR await_human_approval .
+.PP
+Nodes mark external boundaries only \(em the calls above plus the
+synthesized input and output.  Pure in-flow computation (arithmetic,
+field access, construction, conditionals, match, the pipeline stages)
+runs inside a node but never becomes one: a trace records where
+execution crossed into the external world, not how it computed
+between crossings.  That is also what keeps replay tractable \(em
+there is nothing to replay in
+.BR "a + b" .
+.PP
+.B effect_level
+is one of:
+.BR pure ,
+.BR deterministic ,
+.BR model ,
+or
+.BR mutation .
+.SH VALUE STORAGE
+Inputs and outputs use one of two reference forms.
+.TP
+.B inline
+For values under the 64 KiB threshold:
+.BR \(dq{\(dqinline\(dq: <value>}\(dq .
+The value lives directly in the node record.
+.TP
+.B hash
+For larger values, stored in
+.IR values/<sha256>.json :
+.BR \(dq{\(dqhash\(dq: \(dqsha256:...\(dq}\(dq .
+The value is referenced by content hash and lives in the
+.I values/
+directory.
+.PP
+Content-addressed storage allows values to be pruned, encrypted,
+redacted, or geographically partitioned independently of the
+trace structure.
+.SH RETRIES AND ERRORS
+.B retries
+is an array of retry records; the current runtime always
+emits an empty array, which means no retries were recorded.
+.PP
+.B errors
+is
+.B null
+on success or
+.BR \(dq{\(dqmessage\(dq: ...}\(dq
+on failure.
+.SH MODEL IDENTITY
+A
+.B model_call
+node records the model it dispatched to with flat fields
+alongside the rest of the node record:
+.PP
+.RS
+.nf
+  "provider":      "openai",
+  "model":         "risk-v1",
+  "model_version": "2024-01-25",
+  "tokens_in":     14,
+  "tokens_out":    8,
+  "cost_cents":    0.0000,
+  "retry_attempts": 0,
+.fi
+.RE
+.PP
+In v1 the runtime always records
+.BR model ;
+.BR provider ,
+.BR model_version ,
+and the usage stats
+.RB ( tokens_in ,
+.BR tokens_out ,
+.BR cost_cents )
+are filled in only when a provider adapter supplies them, and
+are otherwise omitted.
+.B retry_attempts
+is the number of gateway retries before the call succeeded
+(0 = first-try success).
+The manifest's
+.B model_calls
+array indexes every
+.B model_call
+node, each entry carrying its
+.BR node ,
+.BR provider ,
+.BR model ,
+and
+.B version
+when known.  These fields are what
+.B "flowd replay"
+uses to re-invoke model nodes against a new model.
+.SH AUDIT LOG
+.I audit.log
+is an append-only, JSON-Lines record of trace access.  One JSON
+object per line, with the fields:
+.BR timestamp ,
+.BR event
+(for example
+.B trace_read
+or
+.BR value_read ),
+.BR caller ,
+.BR trace_id ,
+.B decision
+(for example
+.B allow
+or
+.BR system ),
+and
+.BR duration_ms .
+.SH COMPATIBILITY
+The trace format is the durable contract.  Adding optional fields
+to any record is safe.  Removing or renaming fields requires an
+explicit migration step.  When the runtime cannot read a trace
+directory \(em a missing or unreadable
+.I manifest.json
+included \(em it emits diagnostic
+.BR R301 .
+.SH DETERMINISM
+Two runs of the same flow against the same inputs produce
+byte-identical traces when both run under a pinned wall clock and
+a pinned execution-id source.  The runtime honors two environment
+variables for this:
+.TP
+.B SOURCE_DATE_EPOCH
+A decimal Unix timestamp.  When set, every
+.B started_at
+and
+.B ended_at
+in the manifest and node records, and the date prefix on every
+.BR execution_id ,
+is derived from this value rather than the wall clock.  This is
+the reproducible-builds convention; the same value across two
+runs yields the same timestamps.
+.TP
+.B FLOWD_EXECUTION_ID_SUFFIX
+Six lowercase hex characters.  When set, the suffix portion of
+every
+.B execution_id
+(the six characters after the date) takes this value rather than
+being drawn from
+.IR /dev/urandom .
+Test suites set this alongside
+.B SOURCE_DATE_EPOCH
+to produce byte-identical trace directories across runs.  Hosts
+should never set it in production: the suffix exists to make
+execution IDs unique across concurrent runs, and pinning it
+collapses that uniqueness.
+.PP
+With both variables pinned, two runs of a flow that calls only
+pure and deterministic tools produce
+.IR diff(1) -clean
+trace directories.  The test suite
+.RB ( tests/api/test_trace.c )
+asserts this property; the
+.B make sanitize
+matrix verifies it under address, undefined-behavior, and thread
+sanitizers.

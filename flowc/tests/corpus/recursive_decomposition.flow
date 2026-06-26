@@ -1,0 +1,321 @@
+# recursive_decomposition.flow — corpus flow #19 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape stress test #3 of 4. This flow's purpose is to surface the
+# RECURSIVE self-call shape — a flow that invokes itself with a
+# narrower problem, with a base case (atomic task) and a depth budget
+# bounding the tree. Recursion already surfaced ORGANICALLY at flow
+# #14 (KYC, where a UBO may itself be a business and trigger a
+# recursive KYC pass). Here it is the deliberate stress.
+#
+# Shape source: BabyAGI (Task Execution Agent + Task Creation Agent +
+# Prioritization Agent; tasks continuously generated and refined
+# based on progress; subtasks added to the queue as work proceeds).
+# Tree of Thoughts (decomposition + generation + evaluation + search;
+# tree depth bounded T ≤ 3, breadth bounded b ≤ 5; aggregation merges
+# results from multiple reasoning paths). ReCAP recursive hierarchical
+# decomposition. Anthropic's general "subagents" framing in Building
+# Effective Agents (orchestrator dispatches to subagents that may
+# themselves spawn further subagents).
+#
+# A recursive-decomposition workflow has this shape:
+#
+#   task in        receive a task with { description, depth_budget,
+#                                         breadth_budget, parent_id }
+#
+#   classify       is this task ATOMIC (executable directly) or
+#                  COMPLEX (needs further breakdown)?
+#                    decision is itself a model call
+#
+#   atomic branch  if atomic OR depth_budget == 0:
+#                    solve directly (search, call tool, compute)
+#                    return Leaf { value, evidence }
+#
+#   complex branch if complex AND depth_budget > 0:
+#                    decompose into [SubTask] (planner)
+#                    cap to breadth_budget elements
+#
+#                    for each sub-task:
+#                      RECURSE — call this same flow with
+#                        depth_budget - 1, parent_id = current task id
+#                      collect children: [TaskResult]
+#
+#                    aggregate children → Internal {
+#                      synthesis, evidence, children,
+#                      cost_cents: sum(children.cost) }
+#
+#   tree as data   the return value carries the entire tree —
+#                  parent's result + array of child results
+#                  recursively. The consumer can inspect the
+#                  reasoning hierarchy, prune branches, re-execute
+#                  failed sub-trees.
+#
+#   budgets        depth bound (tree depth ≤ N)
+#                  breadth bound (children per node ≤ M)
+#                  total wall-clock bound across the whole tree
+#                  total cost bound across the whole tree
+#                  Each bound is checked at every node; any breach
+#                  collapses subsequent recursion to atomic-execute
+#                  with what's known.
+#
+#   side effects   audit-log each task spawn (a node in the tree
+#                  IS an audit-relevant event for explainable AI);
+#                  emit progress events as nodes complete;
+#                  persist intermediate results for the resumption
+#                  case
+#
+# Three load-bearing facts:
+#
+#   (a) The flow must call itself. Not a structurally-similar
+#       sibling flow — itself, with a narrower input. In current
+#       Flow there is no syntax for this, and the resolver was not
+#       designed for recursive flow references. The compilable stub
+#       below CANNOT contain a recursive call; it has to delegate
+#       the whole tree to an opaque tool that internally manages
+#       recursion via its own task queue. The very thing the flow
+#       exists to demonstrate is not expressible. Second organic
+#       occurrence of #7 recursive-self-call (first: flow #14 KYC
+#       UBOs).
+#
+#   (b) The return value is structurally recursive. TaskResult is
+#       either a Leaf (atomic) carrying a value, or an Internal
+#       node carrying a list of TaskResults — its children. This is
+#       a RECURSIVE SUM TYPE: `TaskResult = Leaf | Internal {
+#       children: [TaskResult] }`. The current type system has
+#       record types with primitive fields and list types of
+#       declared types, but no notion of variant types and no
+#       notion of a type referring to itself. Encoding the
+#       hierarchy as a flat list with parent_id pointers (the
+#       compilable workaround below) loses the structural recursion
+#       and pushes tree-walking into post-processing tools.
+#
+#   (c) Tree budgets compound across recursion. Total cost across
+#       a 5-level deep tree with breadth 5 at each level is the
+#       sum of cost across 5+5²+5³+5⁴+5⁵ = ~3900 LLM calls if
+#       fully expanded. The flow needs cost-accumulation primitives
+#       that survive across recursive invocations — i.e., shared
+#       mutable state across the recursion. This is broader than
+#       #8 expression ops alone — it is "accumulation across
+#       recursive calls," which in functional languages is handled
+#       by threading state explicitly through return values, and
+#       in imperative languages by a shared accumulator. Current
+#       Flow has neither.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today — uses recursive
+# self-call):
+#
+#   flow decompose(TaskRequest) -> TaskResult {
+#     classification = classify_task(it.description)
+#
+#     # base case: atomic, OR depth budget exhausted
+#     if classification.kind == "atomic" or it.depth_budget == 0:
+#       solved = solve_directly(it.description)
+#       return Leaf { value: solved.value,
+#                     evidence: solved.evidence,
+#                     cost_cents: solved.cost_cents }
+#
+#     # decompose:
+#     subtasks = plan_subtasks(it.description, it.breadth_budget)
+#
+#     # recurse — same flow, narrower input:
+#     children = map(subtasks, st -> decompose(TaskRequest {
+#       description:    st.description,
+#       depth_budget:   it.depth_budget - 1,
+#       breadth_budget: it.breadth_budget,
+#       parent_id:      it.task_id,
+#       task_id:        st.id,
+#     }))
+#
+#     # aggregate children's results:
+#     synthesis = synthesise(it.description, children)
+#
+#     Internal {
+#       synthesis,
+#       children,
+#       cost_cents: sum_costs(children) + synthesis.cost_cents,
+#     }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #7   sub-flow composition — PREDICTED. Specifically the
+#                 RECURSIVE SELF-CALL sub-case. Second corpus
+#                 occurrence (first: flow #14 KYC). The KYC case is
+#                 "recursion because the data model is recursive";
+#                 here it is "recursion because the algorithm is
+#                 recursive." Both demand the same language feature:
+#                 a flow can reference itself by name. Worth tracking
+#                 as 7a (composition: flow calls a different flow) vs
+#                 7b (self-recursion: flow calls itself). Both are
+#                 unwritable; 7b has the additional question of
+#                 termination guarantees.
+#
+#   blocked: #4   loops / fold over list — PREDICTED. 4a (map-fold
+#                 over list, per Friday's recommended split) is
+#                 dominant here: map over sub-tasks → recursive
+#                 calls → list of child results, then fold to
+#                 aggregate. Recurs from flows #4, #8, #15, #16,
+#                 #17, #18 (across both 4a and 4b sub-shapes).
+#
+#   blocked: #11  sum types / variants — NINTH corpus occurrence.
+#                 TWO new variant cases here:
+#                 (1) Task = Atomic{description} | Complex{
+#                     description, subtasks: [TaskRequest]}
+#                 (2) TaskResult = Leaf{value, evidence, cost} |
+#                     Internal{synthesis, children: [TaskResult],
+#                              cost}
+#                 Case (2) is the corpus's first occurrence of a
+#                 RECURSIVE SUM TYPE — a variant that contains a
+#                 list of itself. Distinct from the non-recursive
+#                 variants of flows #10/#12/#13/#14/#15/#16/#17/
+#                 #18 because the type-system question is harder
+#                 (well-founded definition, termination of
+#                 recursive matching). Worth flagging on Friday as
+#                 a sub-finding under #11: not just "variants" but
+#                 "recursive variants."
+#
+#   blocked: #1   multi-branch routing — atomic-vs-complex
+#                 dispatch; budget-exhausted-vs-not dispatch;
+#                 leaf-vs-internal at return.
+#
+#   blocked: #5   conditional binding — decompose ONLY if not
+#                 atomic AND depth budget remaining; recurse ONLY
+#                 if budgets allow; synthesise ONLY if any children
+#                 returned successfully.
+#
+#   blocked: #3   in-source error handling — sub-task fails → mark
+#                 that branch failed but continue with siblings
+#                 (3b accumulation across the tree); planner fails
+#                 → fall back to atomic execution (3a recovery).
+#
+#   blocked: #6   streaming / partial results — SIXTH organic
+#                 corpus occurrence. Decomposition trees stream
+#                 their structure to UIs as nodes complete; tools
+#                 like the Anthropic Claude.ai "agents" UI show the
+#                 tree filling in left-to-right, top-to-bottom in
+#                 real time. The whole-tree-returned-at-end model
+#                 cannot express this.
+#
+#   blocked: #8   string / numeric expression ops — sixth corpus
+#                 occurrence. Cost accumulation across recursive
+#                 calls (`sum_costs(children) + synthesis.cost`);
+#                 depth-budget decrement (`it.depth_budget - 1`);
+#                 breadth-budget check. Six distinct domains
+#                 demanding expression ops at this point: time
+#                 (flow #11), retrieval scoring (#13), SLO math
+#                 (#15), merchandising weights (#16), refinement
+#                 cost tracking (#18), recursion budgets (#19).
+#
+#   blocked: #10  optional types — synthesis absent on leaves;
+#                 children empty list on leaves; evidence absent
+#                 on certain failure modes; cost_cents zero
+#                 sentinel is the workaround for "absent."
+#
+#   blocked: #12  time / scheduling — 12a deadlines: total wall-
+#                 clock across the tree must bound; 12f durable
+#                 execution: trees that explore for hours benefit
+#                 from checkpointing (same gap as flow #17). For
+#                 trees that exceed in-process time, the
+#                 long-running shape is mandatory.
+#
+#   blocked: #13  Other: MANDATORY SIDE EFFECTS (slot #17,
+#                 promoted at flow #17) — fifth occurrence.
+#                 Audit-log each task spawn; emit progress event
+#                 per node completion; persist intermediate results
+#                 for explainability and re-execution.
+#
+#   blocked: #13  Other: SIDE-EFFECT IDEMPOTENCY — THIRD
+#                 corpus occurrence (after flow #17 long_research
+#                 and flow #18 iterative_refinement). On resume
+#                 of a partially-completed tree, sub-trees that
+#                 have already returned must not re-execute and
+#                 must not re-fire their side effects (logging,
+#                 cost-accounting, child-spawn). Three
+#                 occurrences across three distinct domains clears
+#                 the promotion threshold. PROMOTE before Friday
+#                 to slot #18: "side-effect idempotency /
+#                 exactly-once semantics on resume — the language
+#                 must distinguish 'already committed' bindings
+#                 from 'must re-fire' on resumption."
+#
+#   blocked: #14  lazy / short-circuit evaluation — fourteenth
+#                 corpus occurrence. Skip decomposition past depth
+#                 budget; skip child recursion once breadth budget
+#                 hit; skip aggregation if all children failed.
+#
+#   blocked: #15  list-literal construction — twelfth occurrence.
+#                 Empty children list on leaves; subtasks list
+#                 from planner. Sub-finding from #18 (record-
+#                 update / list-append within iterations) recurs
+#                 here as the natural "append a child's result to
+#                 the accumulating list" form.
+#
+#   blocked: #16  aggregation primitives — tenth occurrence.
+#                 sum_costs across children; concat evidence
+#                 lists; group_by sub-task kind for breadth
+#                 analysis.
+#
+#   blocked: #13  Other: no string literals — task-kind enum,
+#                 outcome enum.
+#
+#   shippable: N — the workflow that compiles below is structurally
+#                  wrong for recursion. It has a single
+#                  `decompose_recursively` tool that holds an
+#                  internal queue and walks the tree. The Flow
+#                  source describes "ask the oracle to solve this";
+#                  it does NOT describe a decomposition strategy.
+#                  An AI-safety reviewer looking for runaway-
+#                  recursion protections in this source would find
+#                  none — they all live inside the tool. For a
+#                  language whose target audience is people who
+#                  want to inspect what an agent system does, this
+#                  is fundamentally broken.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: a single opaque tool that internally walks the
+# entire tree. The flow self-call (the very thing the flow stresses)
+# cannot be written; the recursive sum type cannot be expressed; the
+# tree structure collapses to a flat list with parent_id pointers.
+
+type TaskRequest    = { task_id:        string,
+                      parent_id:      string,
+                      description:    string,
+                      depth_budget:   int,
+                      breadth_budget: int,
+                      wall_clock_budget_seconds: int,
+                      cost_budget_cents:         int }
+
+type TaskNode       = { task_id:     string,
+                      parent_id:   string,
+                      kind:        string,
+                      synthesis:   string,
+                      value:       string,
+                      evidence:    [string],
+                      cost_cents:  int,
+                      depth:       int }
+
+type TaskResult     = { root_task_id:    string,
+                      status:          string,
+                      total_cost_cents: int,
+                      nodes:           [TaskNode],
+                      final_synthesis: string }
+
+tool decompose_recursively  (req: TaskRequest)            -> TaskResult
+  effect model("decompose-v1")
+
+flow decompose(TaskRequest) -> TaskResult {
+  # workaround: the entire decomposition — recursion via flow self-
+  # call, tree-as-data via recursive sum type, atomic-vs-complex
+  # dispatch, depth/breadth/cost/time budget management, per-node
+  # side effects (audit, progress emit, persistence),
+  # idempotency-on-resume, child aggregation — collapses into one
+  # opaque tool. The Flow source is one line. Every load-bearing
+  # construct named in this file's friction marks is INSIDE the
+  # tool, not visible from the workflow. For a stress test of
+  # recursion, this is the maximum-degenerate stub.
+  result = decompose_recursively(it)
+
+  result
+}

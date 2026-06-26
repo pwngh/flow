@@ -1,0 +1,111 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/subflow_smoke.flow",
+  "types": [
+    {
+      "name": "Credit",
+      "kind": "record",
+      "fields": [
+        {"name": "score", "type": "int"}
+      ]
+    },
+    {
+      "name": "Verdict",
+      "kind": "record",
+      "fields": [
+        {"name": "approved", "type": "bool"},
+        {"name": "basis", "type": "Credit"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "fetch_credit",
+      "input": [
+        {"name": "applicant_id", "type": "string"}
+      ],
+      "output": "Credit",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "review_credit",
+      "params": [
+        {"name": "applicant_id", "type": "string", "implicit": false},
+        {"name": "approve", "type": "bool", "implicit": false}
+      ],
+      "output": "Verdict",
+      "bindings": [
+        {
+          "name": "c",
+          "expr": {
+            "kind": "call",
+            "tool": "fetch_credit",
+            "args": [
+              {
+                "field": "applicant_id",
+                "value": {
+                  "kind": "path",
+                  "segments": ["applicant_id"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "construct",
+        "type": "Verdict",
+        "fields": [
+          {
+            "name": "approved",
+            "value": {
+              "kind": "path",
+              "segments": ["approve"]
+            }
+          },
+          {
+            "name": "basis",
+            "value": {
+              "kind": "path",
+              "segments": ["c"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "adjudicate",
+      "params": [
+        {"name": "applicant_id", "type": "string", "implicit": false},
+        {"name": "approve", "type": "bool", "implicit": false}
+      ],
+      "output": "Verdict",
+      "bindings": [],
+      "return": {
+        "kind": "subflow_call",
+        "flow": "review_credit",
+        "args": [
+          {
+            "field": "applicant_id",
+            "value": {
+              "kind": "path",
+              "segments": ["applicant_id"]
+            }
+          },
+          {
+            "field": "approve",
+            "value": {
+              "kind": "path",
+              "segments": ["approve"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

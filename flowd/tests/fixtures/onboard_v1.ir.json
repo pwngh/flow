@@ -1,0 +1,52 @@
+{
+  "ir_version": "1.0",
+  "types": [
+    {
+      "name": "SignupRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "email", "type": "string"}
+      ]
+    },
+    {
+      "name": "User",
+      "kind": "record",
+      "fields": [
+        {"name": "email", "type": "string"},
+        {"name": "id",    "type": "string"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name":   "create_user",
+      "input":  [
+        {"name": "email", "type": "string"}
+      ],
+      "output": "User",
+      "effect": {
+        "level": "deterministic"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name":   "onboard",
+      "params": [
+        {"name": "it", "type": "SignupRequest", "implicit": true}
+      ],
+      "output":   "User",
+      "bindings": [],
+      "return": {
+        "kind": "call",
+        "tool": "create_user",
+        "args": [
+          {
+            "field": "email",
+            "value": {"kind": "path", "segments": ["it", "email"]}
+          }
+        ]
+      }
+    }
+  ]
+}

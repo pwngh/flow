@@ -1,0 +1,1 @@
+tests/fixtures/check_e124_suggestion_field.flow:4:24: error[E124]: reference to unknown name 'cst'; did you mean 'cost'?

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools >= 64", "wheel", "cffi >= 1.16"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flowd"
+version = "0.1.0"
+description = "Python binding for the Flow runtime."
+requires-python = ">= 3.10"
+# API/static mode (see README.md "Installing"): cffi is needed at BUILD
+# time (in [build-system].requires above, to compile the extension that
+# static-links flowd/libflowd.a via ffibuilder.set_source) and at runtime
+# (below, for the ffi/lib objects the compiled module exposes).
+dependencies = ["cffi >= 1.16"]
+
+[project.optional-dependencies]
+test = ["pytest >= 7"]
+anthropic = ["anthropic >= 0.40"]  # for flowd.contrib.anthropic
+
+[tool.setuptools]
+packages = ["flowd", "flowd.contrib"]

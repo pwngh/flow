@@ -1,0 +1,291 @@
+# interview_scheduler.flow — corpus flow #11 of 20.
+# See ../../../CORPUS_PLAN.md for the rubric this file is scored against.
+#
+# Shape source: Cal.com (open source, AGPL — round-robin scheduling
+# infrastructure, host weights/priorities, slot union vs intersection,
+# routing forms that auto-direct by captured fields). Greenhouse
+# automated scheduling docs (panel scheduling across multiple
+# interviewers, calendar integration, back-to-back protection via
+# buffer config, interviewer interview-load limits, OOO detection).
+#
+# An interview-scheduling workflow has this shape:
+#
+#   gather availability  for each interviewer (parallel, ≤ 3 in this
+#                        flow's spec):
+#                          fetch free/busy from their calendar
+#                            (Google / Outlook 365 — different APIs,
+#                             each may fail independently)
+#                          read their working hours (per-interviewer,
+#                            possibly per-timezone)
+#                          read their interview-load (count this week,
+#                            against per-interviewer limit)
+#                          read OOO status
+#
+#   generate slots       compute candidate slots over the requested
+#                        window:
+#                          PANEL mode  → intersect all interviewers'
+#                                        free time (must work for all)
+#                          ROUND-ROBIN → union, then pick one host
+#                                        per slot via weight / priority
+#                        apply per-slot constraints:
+#                          inside each interviewer's working hours
+#                          inside candidate's working hours (their tz)
+#                          ≥ buffer minutes from each interviewer's
+#                            adjacent meetings (no back-to-back)
+#                          interviewer not over load-limit for the week
+#                          slot duration ≥ duration_min
+#                          within candidate's preferred window
+#
+#   rank & pick          score each slot:
+#                          earlier > later  (most-common preference)
+#                          interviewers with lower load get bonus
+#                          deprioritise late-Friday / early-Monday
+#                          fit candidate's stated preference
+#                        pick the top-ranked slot
+#                        if no slot exists → escalate / widen window
+#
+#   send invites         create calendar event for each interviewer
+#                          (calendar block — different APIs again)
+#                        send candidate invite (calendar + email)
+#                        notify recruiter
+#                        record into ATS (Greenhouse stage)
+#
+#   handle declines      if an interviewer declines after the fact,
+#                        re-trigger the flow with that interviewer
+#                        removed from the pool — itself a separate
+#                        flow that calls this one
+#
+# Three load-bearing facts:
+#
+#   (a) Time is data here. The workflow needs duration arithmetic
+#       ("slot.start + duration_min == slot.end"), timezone conversion
+#       ("interviewer.tz business hours overlap candidate.tz business
+#       hours"), and per-day-of-week predicates ("not Friday after
+#       3pm"). This is the first corpus flow where the *arithmetic*
+#       on values matters, distinct from time-as-flow-control (#12).
+#
+#   (b) The pipeline form `| rank | pick using` is a GENUINE fit for
+#       the slot-selection stage — filter candidate slots, rank by
+#       score, pick the top. Same shape as onboard.flow's plan-pick.
+#       This is a corpus positive: at least one part of the workflow
+#       reads naturally in the language we have.
+#
+#   (c) Per-interviewer availability is structurally a sub-flow: each
+#       calendar API call, OOO check, working-hours read is the same
+#       small flow with a different interviewer ID. Without #7 they
+#       inline into a 3-arg tool that hides the iteration. The number
+#       3 is in the corpus spec ("across 3 calendars"); a real
+#       scheduler handles N.
+#
+# ----------------------------------------------------------------------
+# Intended flow (NOT expressible in Flow today):
+#
+#   flow schedule(ScheduleRequest) -> ScheduleResult {
+#     # parallel fan-out over the interviewer list:
+#     availabilities = map(it.interviewer_ids, id -> get_availability(
+#       id, it.window_start, it.window_end, it.candidate_tz
+#     ))
+#
+#     # tolerate per-interviewer failure (OOO, API error):
+#     usable = filter(availabilities, a -> a.error == "")
+#     if size(usable) < it.min_interviewers:
+#       escalate_to_recruiter(it, "insufficient_availability", usable)
+#       return ScheduleResult { ... empty ... }
+#
+#     # slot generation depends on mode:
+#     slots =
+#       if it.mode == "panel":
+#         intersect_free_slots(usable, it.duration_min)
+#       else:  # round_robin
+#         union_free_slots(usable, it.duration_min)
+#
+#     # constraint filter with time arithmetic:
+#     valid = filter(slots, s ->
+#       s.start + it.duration_min*60 == s.end
+#       and  inside_working_hours(s, it.candidate_tz)
+#       and  all(usable, i -> buffer_ok(s, i.events, 15))
+#       and  not is_friday_after_3pm(s, it.candidate_tz)
+#       and  not is_monday_before_10am(s, it.candidate_tz)
+#     )
+#
+#     if size(valid) == 0:
+#       # widen the window once before escalating:
+#       widened = expand_window(it.window_start, it.window_end, +7.days)
+#       return schedule(it with { window_end: widened.end })  # recursive
+#
+#     best = valid | rank score desc | pick using primary
+#
+#     # parallel invite send:
+#     interviewer_invites = map(it.interviewer_ids, id ->
+#       send_calendar_invite(id, best, it.interview_kind)
+#     )
+#     candidate_invite = send_candidate_invite(it.candidate_email, best, ...)
+#
+#     ScheduleResult { slot: best,
+#                      candidate_invite, interviewer_invites }
+#   }
+#
+# ----------------------------------------------------------------------
+# Friction marks (per the CORPUS_PLAN rubric):
+#
+#   blocked: #2   parallel fan-out + join — calendar fetches for the
+#                 interviewer pool are independent, must run in
+#                 parallel to meet UX latency. Plus the invite-send
+#                 step parallelises across interviewers.
+#
+#   blocked: #4   loops / fold over a list — three uses: map over
+#                 interviewers for availability, filter+intersect to
+#                 produce slots, map over interviewers again for
+#                 invites. The pool size is variable; the language's
+#                 fixed-arity tools force a 3-arg signature that
+#                 cannot accommodate panels of 4+ or round-robin pools
+#                 of 10+. Recurs from flows #4, #8.
+#
+#   blocked: #5   conditional binding — widen-window-then-retry is a
+#                 conditional; OOO-fallback to backup pool is a
+#                 conditional. Compounds with #3 (recovery).
+#
+#   blocked: #3   in-source error handling — calendar APIs fail
+#                 individually. Production: proceed with the
+#                 interviewers whose calendars returned, escalate if
+#                 the panel is now incomplete. Accumulation form
+#                 also: collect per-interviewer errors into the
+#                 escalation payload.
+#
+#   blocked: #7   sub-flow composition — get_availability(id, ...) is
+#                 a small flow per interviewer (calendar API, OOO,
+#                 working-hours, load-limit). Today it must be a
+#                 single tool taking the whole pool, hiding the
+#                 per-interviewer structure.
+#
+#   blocked: #8   string / numeric EXPRESSION OPS — FIRST OCCURRENCE
+#                 in the corpus. The constraint filter needs
+#                 arithmetic on time values: `slot.start +
+#                 duration_min * 60 == slot.end`, timezone shifts,
+#                 day-of-week predicates. The language admits
+#                 comparisons inside `where` predicates but no
+#                 arithmetic. The constant `duration_min` cannot be
+#                 multiplied by 60. The constant 60 cannot be
+#                 written as a non-literal expression. Scheduling
+#                 cannot be expressed without expression ops.
+#
+#   blocked: #10  optional types — backup_interviewer_pool only
+#                 populated when load limits force fallback;
+#                 candidate.preferred_window optional;
+#                 candidate.declined_at populated only on rescheduling.
+#
+#   blocked: #12  time / scheduling — predicted. Sub-shapes:
+#                 12a deadlines: "must schedule before candidate's
+#                     offer expires"
+#                 NEW 12e TIME-AS-DATA: working-hours predicates,
+#                     timezone conversion, day-of-week tests,
+#                     duration arithmetic. Distinct from 12a/b/c
+#                     (which are time-as-flow-control). The corpus
+#                     should add 12e as a sub-shape — if RAG (#13)
+#                     or any later flow uses temporal predicates,
+#                     that confirms time-as-data as its own gap.
+#
+#   blocked: #14  (PROMOTED at flow #7) lazy / short-circuit
+#                 evaluation. Sixth occurrence. Here the form is
+#                 "skip the expensive invite-send step if no slot
+#                 was found" — relevant to the "0 valid slots →
+#                 escalate" branch.
+#
+#   blocked: #15  (PROMOTED at flow #9) list-literal construction.
+#                 Fourth occurrence. Interviewer pool as a literal
+#                 list of IDs; candidate's preferred-time list;
+#                 escalation-payload list of failed interviewers.
+#
+#   blocked: #13  Other: no string literals — mode enum ("panel" /
+#                 "round_robin"), kind enum (interview templates),
+#                 timezone names. Recurring.
+#
+#   POSITIVE     The pipeline `| rank score desc | pick using primary`
+#                fits the slot-selection step naturally. Same shape
+#                as onboard.flow. This is a corpus positive worth
+#                noting on Friday: not every part of every flow is
+#                broken; the pipeline form is well-targeted at
+#                "given a list, select one." If the language gained
+#                #4 map and #11 sum types, the pipeline form would
+#                still be doing real work in many flows.
+#
+#   shippable: N — the workflow that compiles below collapses the
+#                  per-interviewer fan-out into one tool that
+#                  internally iterates, takes a fixed-arity list of
+#                  IDs, and uses an opaque "best slot" criterion. It
+#                  works for the 3-interviewer panel case the corpus
+#                  spec names but breaks for round-robin pools of any
+#                  variable size. A real scheduling team running it
+#                  would treat it as a sketch, not a flow.
+#
+# ----------------------------------------------------------------------
+# Compilable stub: opaque mutual-slots tool, pipeline-form slot
+# selection, opaque invite-send. The pipeline use is genuine.
+
+type ScheduleRequest = { candidate_email: string,
+                       candidate_tz:    string,
+                       duration_min:    int,
+                       window_start:    int,
+                       window_end:      int,
+                       interviewer_ids: [string],
+                       interview_kind:  string,
+                       mode:            string }
+
+type TimeSlot       = { start:          int,
+                      end:            int,
+                      score:          float,
+                      assigned_hosts: [string] }
+
+type Invite         = { invitee_email:     string,
+                      calendar_event_id: string,
+                      send_status:       string }
+
+type ScheduleResult = { slot:                TimeSlot,
+                      candidate_invite:    Invite,
+                      interviewer_invites: [Invite],
+                      outcome:             string }
+
+tool find_mutual_slots  (interviewer_ids: [string],
+                         window_start:    int,
+                         window_end:      int,
+                         duration_min:    int,
+                         candidate_tz:    string,
+                         mode:            string)        -> [TimeSlot]
+  effect deterministic
+
+tool send_invites       (slot:            TimeSlot,
+                         candidate_email: string,
+                         candidate_tz:    string,
+                         interviewer_ids: [string],
+                         kind:            string)        -> ScheduleResult
+  effect mutation
+
+flow schedule(ScheduleRequest) -> ScheduleResult {
+  # workaround: the per-interviewer fan-out (calendar fetch + OOO +
+  # working-hours + load-limit) and the panel-vs-round-robin slot
+  # generation collapse into one tool. The constraint filter (working
+  # hours, buffers, day-of-week) is also hidden inside.
+  candidates = find_mutual_slots(it.interviewer_ids,
+                                 it.window_start,
+                                 it.window_end,
+                                 it.duration_min,
+                                 it.candidate_tz,
+                                 it.mode)
+
+  # genuine fit: the pipeline form is what slot selection wants.
+  # `rank score desc | pick using primary` is "best by score";
+  # the runtime treats `primary` as the selector hook.
+  best = candidates
+       | rank score desc
+       | pick using primary
+
+  # workaround: per-interviewer invite-send + candidate invite +
+  # recruiter notify + ATS write all collapse into one tool.
+  result = send_invites(best,
+                        it.candidate_email,
+                        it.candidate_tz,
+                        it.interviewer_ids,
+                        it.interview_kind)
+
+  result
+}

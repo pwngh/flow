@@ -1,0 +1,9 @@
+type R = { score: int, cost: int }
+
+tool t(a: int) -> R
+  effect model("m")
+
+flow f(int) -> int {
+  r = t(it)
+  r.cst
+}

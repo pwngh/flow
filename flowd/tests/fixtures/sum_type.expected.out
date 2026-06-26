@@ -1,0 +1,21 @@
+ir_version: 1.0
+types:
+  [1] string (primitive)
+  [2] int (primitive)
+  [3] float (primitive)
+  [4] bool (primitive)
+  [100] Decision (sum)
+    #0 Approve {limit: int}
+    #1 Deny {reason: string}
+tools:
+  classify
+    effect: deterministic
+    input: amount:int
+    output: Decision
+flows:
+  adjudicate
+    params: it:int (implicit)
+    output: Decision
+variant_index:
+  Approve -> Decision#0
+  Deny -> Decision#1

@@ -1,0 +1,8 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/empty_source.flow",
+  "types": [],
+  "tools": [],
+  "flows": []
+}

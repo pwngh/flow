@@ -1,0 +1,89 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/corpus/recursive_decomposition.flow",
+  "types": [
+    {
+      "name": "TaskRequest",
+      "kind": "record",
+      "fields": [
+        {"name": "task_id", "type": "string"},
+        {"name": "parent_id", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "depth_budget", "type": "int"},
+        {"name": "breadth_budget", "type": "int"},
+        {"name": "wall_clock_budget_seconds", "type": "int"},
+        {"name": "cost_budget_cents", "type": "int"}
+      ]
+    },
+    {
+      "name": "TaskNode",
+      "kind": "record",
+      "fields": [
+        {"name": "task_id", "type": "string"},
+        {"name": "parent_id", "type": "string"},
+        {"name": "kind", "type": "string"},
+        {"name": "synthesis", "type": "string"},
+        {"name": "value", "type": "string"},
+        {"name": "evidence", "type": "[string]"},
+        {"name": "cost_cents", "type": "int"},
+        {"name": "depth", "type": "int"}
+      ]
+    },
+    {
+      "name": "TaskResult",
+      "kind": "record",
+      "fields": [
+        {"name": "root_task_id", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "total_cost_cents", "type": "int"},
+        {"name": "nodes", "type": "[TaskNode]"},
+        {"name": "final_synthesis", "type": "string"}
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "decompose_recursively",
+      "input": [
+        {"name": "req", "type": "TaskRequest"}
+      ],
+      "output": "TaskResult",
+      "effect": {
+        "level": "model",
+        "model": "decompose-v1"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "decompose",
+      "params": [
+        {"name": "it", "type": "TaskRequest", "implicit": true}
+      ],
+      "output": "TaskResult",
+      "bindings": [
+        {
+          "name": "result",
+          "expr": {
+            "kind": "call",
+            "tool": "decompose_recursively",
+            "args": [
+              {
+                "field": "req",
+                "value": {
+                  "kind": "path",
+                  "segments": ["it"]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["result"]
+      }
+    }
+  ]
+}

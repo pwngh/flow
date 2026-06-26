@@ -1,0 +1,9 @@
+type User = { id: string }
+
+tool noop() -> User
+  effect deterministic
+
+flow demo(User) -> User {
+  u = noop()
+  u
+}

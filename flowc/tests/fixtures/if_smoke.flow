@@ -1,0 +1,10 @@
+flow grade(score: int, high: bool, mid: bool) -> int {
+  tier =
+    if high then
+      4
+    else if mid then
+      2
+    else
+      0
+  tier
+}

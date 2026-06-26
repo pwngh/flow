@@ -1,0 +1,54 @@
+{
+  "ir_version": "1.0",
+  "compiled_at": "1970-01-01T00:00:00Z",
+  "source_file": "tests/fixtures/lex_numeric_literals.flow",
+  "types": [],
+  "tools": [],
+  "flows": [
+    {
+      "name": "nums",
+      "params": [
+        {"name": "it", "type": "int", "implicit": true}
+      ],
+      "output": "float",
+      "bindings": [
+        {
+          "name": "big",
+          "expr": {
+            "kind": "literal",
+            "value": 1000000,
+            "type": "int"
+          }
+        },
+        {
+          "name": "sci",
+          "expr": {
+            "kind": "literal",
+            "value": 6.022e+23,
+            "type": "float"
+          }
+        },
+        {
+          "name": "small",
+          "expr": {
+            "kind": "literal",
+            "value": 0.0015,
+            "type": "float"
+          }
+        },
+        {
+          "name": "pi",
+          "expr": {
+            "kind": "literal",
+            "value": 3.141592,
+            "type": "float"
+          }
+        }
+      ],
+      "return": {
+        "kind": "path",
+        "segments": ["pi"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+ir_version: 1.0
+types:
+  [1] string (primitive)
+  [2] int (primitive)
+  [3] float (primitive)
+  [4] bool (primitive)
+tools:
+flows:
+variant_index:

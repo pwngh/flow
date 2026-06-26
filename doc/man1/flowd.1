@@ -1,0 +1,205 @@
+.TH FLOWD 1 "May 2026" "" "Flow Manual"
+.SH NAME
+flowd \- the Flow runtime CLI
+.SH SYNOPSIS
+.B flowd
+.I subcommand
+.RI [ options ]
+.PP
+.B flowd --help
+.br
+.B flowd --version
+.SH DESCRIPTION
+.B flowd
+executes flows
+.RB ( run ),
+strict-compares two recorded traces
+.RB ( replay ),
+and diffs traces
+.RB ( diff ).
+Re-executing a recorded run against a new model is done through the
+C API
+.BR flowd_replay (),
+not this binary;
+.B replay
+here only compares two existing trace directories.
+The
+.B run
+subcommand executes a compiled IR against deterministic,
+type-directed stub tools, so the
+.B flowc
+\(->
+.B flowd
+chain is runnable from the command line for any program; it is a
+smoke/dry execution \(em the flow's own logic runs for real, but the
+tool implementations are stand-ins.  Production execution with real
+tool behavior happens through
+.B libflowd ,
+called from a host program or via a language binding: the library
+owns the tool implementations and records traces.
+.SH SUBCOMMANDS
+.SS run
+Execute a flow from a compiled IR and write a trace.
+.PP
+.RS
+.nf
+flowd run <ir.json> [--flow NAME] [--input JSON] [--trace-dir DIR]
+.fi
+.RE
+.PP
+A type-directed stub is registered for every tool the IR declares
+(returning a default value of the tool's output type), and the
+flow is executed against them.  The flow's expressions, pipelines,
+conditionals, and
+.B match
+arms are evaluated for real; only the external tool calls are
+stubbed.  The flow's output is printed to stdout and a full trace
+is written under
+.IR --trace-dir
+(default
+.IR ./traces ).
+.TP
+.BI --flow " NAME"
+Flow to run.  Defaults to the first flow declared in the IR.
+.TP
+.BI --input " JSON"
+Flow input as a JSON value.  When omitted, a default input is
+synthesized from the flow's parameter types.
+.TP
+.BI --trace-dir " DIR"
+Root under which the
+.I <flow>/<execution_id>/
+trace directory is written.  Defaults to
+.IR ./traces .
+.SS replay
+Compare a recorded trace against its replay, asserting that the
+fields it checks match.
+.PP
+.RS
+.nf
+flowd replay <original_trace_dir> <new_trace_dir>
+.fi
+.RE
+.PP
+Divergences are reported on stdout in the same JSON form as
+.BR diff ,
+and only the same fields are compared: six manifest fields (flow
+name, IR hash, input and output hashes, status, node count) and
+each node's recorded
+.B invocations
+array.  Other recorded fields \(em node kind, effect level,
+provider, model, token counts, and the
+.B replay_of
+cross-reference \(em are not compared, so \(lqno divergences\(rq
+means the compared subset matches, not that the two traces are
+byte-for-byte identical.  The exit status is 0 only when that
+subset matches.
+Re-execution itself \(em restoring Level 0 and Level 1 nodes
+from recorded outputs, re-invoking Level 2 (model) nodes against
+a new model with the recorded inputs, and restoring Level 3
+(mutation) nodes without re-invoking \(em happens through the
+library function
+.BR flowd_replay ()
+declared in
+.IR flowd.h ;
+this subcommand compares the trace such a replay writes against
+the original.
+.SS diff
+Compare two traces \(em typically an original and its replay \(em
+and report per-node differences.
+.PP
+.RS
+.nf
+flowd diff exec_2026_05_26_a3f2b1 exec_2026_11_20_replay
+.fi
+.RE
+.PP
+Output is a JSON report listing divergences in the manifest
+(flow name, IR hash, input and output hashes, status, node
+count) and in each node's recorded invocations.  Trace nodes
+exist only at external boundaries
+.RB ( input ,
+.BR output ,
+.BR tool_call ,
+.BR model_call ,
+.BR subflow_call ,
+.BR suspension );
+pipeline stages such as
+.B select
+and
+.B where
+are not recorded as nodes and do not appear in the diff.  Unlike
+.BR replay ,
+.B diff
+exits 0 whether or not divergences are found.
+.SH OPTIONS
+.TP
+.B --help
+Show usage and exit.
+.TP
+.B --version
+Show version and exit.
+.TP
+.BI --load-ir " path"
+Test-only.  Load an IR file and print a human-readable
+introspection summary of the resulting runtime state.  This flag
+exercises the loader for the fixture suite; it is not part of the
+public surface and may change between phases.
+.TP
+.BI --canonical-dump " path"
+Test-only.  Load an IR file and print a byte-deterministic JSON
+canonical form of the loaded runtime state.  Like
+.BR --load-ir ,
+this is for the fixture suite and is not a stable interface.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.  For
+.BR run ,
+the flow completed (or suspended) and its trace was written; for
+.BR replay ,
+the compared fields show no divergences; for
+.BR diff ,
+the comparison completed (divergences, if any, are reported on
+stdout and do not affect the exit status).
+.TP
+.B 1
+Invocation error (no subcommand given, or unknown subcommand);
+for
+.BR run ,
+the IR failed to load or the flow errored during execution; for
+.BR replay ,
+the traces diverge.
+.TP
+.B 2
+Missing arguments, or a trace directory could not be read.
+.SH FILES
+.TP
+.I traces/<flow_name>/<execution_id>/
+Per-execution trace directory.
+.SH ENVIRONMENT
+.TP
+.B SOURCE_DATE_EPOCH
+Decimal Unix timestamp.  When set, the trace writer uses this
+value for every timestamp it emits and for the date prefix on
+every
+.BR execution_id .
+This is the reproducible-builds convention.
+.TP
+.B FLOWD_EXECUTION_ID_SUFFIX
+When set, every
+.B execution_id
+suffix takes this value rather than reading
+.IR /dev/urandom .
+Six lowercase hex characters is the recommended form, but this is
+not enforced: the code takes the first six bytes of any value at
+least six characters long, verbatim.
+Pin it alongside
+.B SOURCE_DATE_EPOCH
+to produce byte-identical trace directories across runs, a
+stronger property than the
+.B replay
+subcommand checks (it compares only the manifest fields and
+recorded invocations described above).  Do not set this in
+production: the suffix
+exists to keep execution IDs unique across concurrent runs.

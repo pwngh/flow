@@ -1,0 +1,1 @@
+tests/fixtures/check_e124_suggestion.flow:3:3: error[E124]: reference to unknown name 'totl'; did you mean 'total'?

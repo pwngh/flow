@@ -1,0 +1,11 @@
+type User = { id: string }
+type Plan = { id: string, cost: int }
+
+tool best_plans() -> [Plan]
+  effect deterministic
+
+flow demo(User) -> [Plan] {
+  ps = best_plans()
+     | where nonexistent_field <= 100
+  ps
+}

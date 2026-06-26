@@ -1,0 +1,15 @@
+# hello.flow — the smallest useful Flow program.
+#
+# A flow takes one typed input (here a bare `int`, referred to as `it`),
+# runs a sequence of `name = expression` bindings, and returns a final
+# expression. This one has no tools at all, so every step is computed
+# in-language — flowd runs it for real, start to finish.
+#
+#   flowc hello.flow -o hello.ir.json
+#   flowd run hello.ir.json --input 16      # -> 42
+
+flow hello(int) -> int {
+  doubled = it * 2
+  result  = doubled + 10
+  result
+}

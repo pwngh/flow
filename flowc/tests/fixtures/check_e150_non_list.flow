@@ -1,0 +1,10 @@
+type User = { id: int }
+
+tool fetch_user(id: int) -> User
+  effect deterministic
+
+flow demo(User) -> User {
+  u = fetch_user(it.id)
+    | where id <= 0
+  u
+}
