@@ -32,6 +32,14 @@
 
 #include "cjson/cJSON.h"
 
+/* These tests join short, controlled fixture paths with readdir() names. gcc
+ * can't bound a dirent name, so it flags the snprintf path-builds below with
+ * -Wformat-truncation though the buffers are amply sized for any real path.
+ * Silence that one false alarm (gcc only; clang has no such warning). */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
+
 static int g_pass = 0;
 static int g_fail = 0;
 static void ok(const char *n) { printf("  ok %s\n", n); g_pass++; }

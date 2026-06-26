@@ -110,9 +110,21 @@ rfc3339_now(char out[32])
     struct tm tm;
     gmtime_r(&ts.tv_sec, &tm);
     int ms = (int)(ts.tv_nsec / 1000000L);
+    /* gmtime_r normalizes these, but the compiler can't see that a struct tm
+     * field stays small — left unbounded it assumes the full int range and
+     * decides the 32-byte buffer might overflow (gcc -Wformat-truncation).
+     * Clamp each field to its natural width; a no-op for every real date. */
+    int yr = tm.tm_year + 1900, mo = tm.tm_mon + 1, dy = tm.tm_mday;
+    int hh = tm.tm_hour, mi = tm.tm_min, ss = tm.tm_sec;
+    if (yr < 0) yr = 0; else if (yr > 9999) yr = 9999;
+    if (mo < 0) mo = 0; else if (mo > 99)   mo = 99;
+    if (dy < 0) dy = 0; else if (dy > 99)   dy = 99;
+    if (hh < 0) hh = 0; else if (hh > 99)   hh = 99;
+    if (mi < 0) mi = 0; else if (mi > 99)   mi = 99;
+    if (ss < 0) ss = 0; else if (ss > 99)   ss = 99;
+    if (ms < 0) ms = 0; else if (ms > 999)  ms = 999;
     snprintf(out, 32, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
-             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min, tm.tm_sec, ms);
+             yr, mo, dy, hh, mi, ss, ms);
 }
 
 /* Milliseconds since epoch (matching rfc3339_now's clock). */
@@ -184,8 +196,13 @@ make_execution_id(const char *tag)
     if (sde && *sde) t = (time_t)strtoll(sde, NULL, 10);
     struct tm tm;
     gmtime_r(&t, &tm);
-    snprintf(date, sizeof date, "%04d_%02d_%02d",
-             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    /* Clamp so the compiler can prove date[] is big enough (see rfc3339_now);
+     * a no-op for any real date. */
+    int yr = tm.tm_year + 1900, mo = tm.tm_mon + 1, dy = tm.tm_mday;
+    if (yr < 0) yr = 0; else if (yr > 9999) yr = 9999;
+    if (mo < 0) mo = 0; else if (mo > 99)   mo = 99;
+    if (dy < 0) dy = 0; else if (dy > 99)   dy = 99;
+    snprintf(date, sizeof date, "%04d_%02d_%02d", yr, mo, dy);
     char suf[7];
     exec_suffix(suf);
     const char *t_sep = (tag && tag[0]) ? "_" : "";

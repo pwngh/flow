@@ -19,6 +19,14 @@
 
 #include "flowd.h"
 
+/* These tests join short, controlled fixture paths with readdir() names. gcc
+ * can't bound a dirent name, so it flags the snprintf path-builds below with
+ * -Wformat-truncation though the buffers are amply sized for any real path.
+ * Silence that one false alarm (gcc only; clang has no such warning). */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
+
 /* Recursive remove so each run starts from a clean trace dir; without
  * this, stale (and once-tampered) exec dirs accumulate and exec_dir()
  * could pick the wrong one. */

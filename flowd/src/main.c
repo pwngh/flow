@@ -217,12 +217,13 @@ diff_traces(const char *path_a, const char *path_b, bool verbose)
     size_t nb = trace_reader_node_count(rb);
     size_t nmax = na > nb ? na : nb;
     for (size_t i = 0; i < nmax; i++) {
-        char nid[16]; snprintf(nid, sizeof nid, "n%zu", i);
+        char nid[24]; snprintf(nid, sizeof nid, "n%zu", i);   /* n + up to 20 size_t digits + NUL */
         cJSON *na_j = trace_reader_node(ra, nid);
         cJSON *nb_j = trace_reader_node(rb, nid);
         if (!na_j && !nb_j) continue;
         if (!na_j || !nb_j) {
-            if (!first) fputs(",\n", stdout); first = false;
+            if (!first) fputs(",\n", stdout);
+            first = false;
             printf("    {\"path\": \"nodes.%s\", "
                    "\"a_present\": %s, \"b_present\": %s}",
                    nid,
@@ -242,7 +243,8 @@ diff_traces(const char *path_a, const char *path_b, bool verbose)
         char *sa = cJSON_PrintUnformatted(inva ? inva : na_j);
         char *sb = cJSON_PrintUnformatted(invb ? invb : nb_j);
         if (sa && sb && strcmp(sa, sb) != 0) {
-            if (!first) fputs(",\n", stdout); first = false;
+            if (!first) fputs(",\n", stdout);
+            first = false;
             printf("    {\"path\": \"nodes.%s.invocations\", "
                    "\"a\": %s, \"b\": %s}", nid, sa, sb);
             divergences++;
