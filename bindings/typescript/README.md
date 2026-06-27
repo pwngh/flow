@@ -153,6 +153,52 @@ Resume is a *separate* execution: it writes a new trace linked via `resumed_from
 while the suspended trace stays `suspended`, untouched. v1 ships one suspending
 tool, the built-in `await_human_approval`.
 
+Across processes — a webhook, a scheduler — resume from a fresh `Runtime` built on
+the same IR with `rt.resume(token, decision)` (`Suspension.resume` is the in-process
+shorthand); `flowd/serve` (below) makes that durable.
+
+## Serving in production
+
+A Flow run is atomic, so the production model is small: **one Runtime per unit of
+work, at-least-once delivery, idempotent mutations, suspend/resume for waits.**
+`flowd/serve` makes that plumbing first-class — pluggable `Store`s, an `idempotent`
+wrapper so a re-run can't double-fire a mutation, and `Pending` to park and resume
+suspensions across processes:
+
+```typescript
+import { Runtime, Suspension, FileStore, idempotent, Pending } from "flowd";
+
+const idem    = new FileStore("state/idem");          // any Store: MemoryStore, FileStore, or your own over Redis/Dynamo
+const pending = new Pending(new FileStore("state/pending"));
+
+const tools = {
+  fetch_credit:     ({ id }) => ({ score: 760, history_years: 9 }),
+  assess_risk:      ({ report, amount }) => ({ approve: true, band: "LOW", rationale: "..." }),
+  notify_applicant: idempotent(idem, ({ email, band }) => {   // claimed atomically — an at-least-once retry can't re-send
+    sendEmail(email, band); return true;
+  }),
+};
+
+function handle(application) {                          // request or worker: run, and park if it pauses for a human
+  using rt = new Runtime("onboarding.ir.json", { traceDir: "traces", tools });
+  const out = rt.run(application);
+  if (out instanceof Suspension) {
+    pending.park(out.token, { id: application.id });
+    return { status: "pending", token: out.token };    // safe to exit; the token is durable
+  }
+  return out;
+}
+
+function onApproval(token, decision) {                  // webhook, a different process: resume on the same IR
+  using rt = new Runtime("onboarding.ir.json", { traceDir: "traces", tools });
+  return pending.resume(rt, token, decision);           // the final value, or re-parks if it suspends again
+}
+```
+
+A `Store` is the only seam: back idempotency and parked suspensions with a file
+(the defaults), an in-process `MemoryStore`, or Redis/DynamoDB/S3 by implementing
+four methods (`get`/`put`/`add`/`delete`, where `add` is a compare-and-set).
+
 ## Install & test
 
 ```sh
@@ -200,6 +246,7 @@ src/
   trace.ts       openTrace, Trace, diffTraces
   schema.ts      jsonSchemaFor (IR type -> JSON Schema)
   redactors.ts   secretRedactor (built-in trace redactor)
+  serve.ts       idempotent, Pending, Store/MemoryStore/FileStore (production helpers)
   anthropic.ts   anthropicProvider (serve model() tools via Claude)
   codegen.ts     flowd-codegen: emits a typed .ts contract from an IR
   native.c       N-API addon; static-links libflowd.a

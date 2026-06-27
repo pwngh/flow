@@ -35,6 +35,15 @@ export {
   type ClaudeResult,
 } from "./anthropic.js";
 
+export {
+  Pending,
+  MemoryStore,
+  FileStore,
+  idempotent,
+  type Store,
+  type IdempotentOptions,
+} from "./serve.js";
+
 // ---- native addon loader -------------------------------------------
 
 interface RunResult {
