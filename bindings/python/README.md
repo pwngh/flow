@@ -145,12 +145,28 @@ work, at-least-once delivery, idempotent mutations, suspend/resume for waits.**
 park and resume suspensions across processes:
 
 ```python
+from flowd import Runtime, Suspension
 from flowd.serve import FileStore, idempotent, Pending
 
+idem    = FileStore("state/idem")            # any Store: MemoryStore, FileStore, or your own over Redis/Dynamo
+pending = Pending(FileStore("state/pending"))
+
 class Host(Onboard):
-    @idempotent(FileStore("state/idem"))      # at-least-once retries are now safe
+    @idempotent(idem)                        # claims the key atomically — an at-least-once retry can't re-send
     def notify_applicant(self, email, band):
         send_email(email, f"risk band: {band}"); return True
+
+def handle(application):                     # request or worker: run, and park if it pauses for a human
+    with Runtime(Host(), trace_dir="traces") as rt:
+        out = rt.run(application)
+        if isinstance(out, Suspension):
+            pending.park(out.token, context={"id": application["id"]})
+            return {"status": "pending", "token": out.token}    # safe to exit; the token is durable
+        return out
+
+def on_approval(token, decision):            # webhook, a different process: resume on the same IR
+    with Runtime(Host(), trace_dir="traces") as rt:
+        return pending.resume(rt, token, decision)              # the final value, or re-parks if it suspends again
 ```
 
 `examples/serving/` has runnable references for the common shapes — request/response
@@ -199,7 +215,7 @@ flowd/
   trace.py               open_trace, Trace, diff_traces
   schema.py              json_schema_for (IR type -> JSON Schema)
   redactors.py           secret_redactor (built-in trace redactor)
-  serve.py               idempotent, Pending, Store/FileStore (production helpers)
+  serve.py               idempotent, Pending, Store/MemoryStore/FileStore (production helpers)
   contrib/anthropic.py   anthropic_provider (serve model() tools via Claude)
 examples/                onboarding.py — a runnable host
   serving/               request/response, worker, webhook — runnable references
