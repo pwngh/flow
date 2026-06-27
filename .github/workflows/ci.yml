@@ -154,6 +154,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y $APT
       - name: flowc line coverage
         run: scripts/coverage.sh flowc 78
+      # flowd's corpus/ and run/ test phases compile + execute real flows, which
+      # covers much of the runtime — but they need flowc on disk. The flowc step
+      # above cleans its build on exit (coverage.sh's trap), so rebuild flowc here
+      # before measuring flowd, or those phases SKIP and undercount coverage.
+      - name: Build flowc (flowd coverage needs it for corpus/run)
+        run: cd flowc && ./configure && make
       - name: flowd line coverage
         run: scripts/coverage.sh flowd 70
 
