@@ -588,9 +588,12 @@ trace_writer_set_model(trace_writer_t *w, const char *node_id,
 {
     node_acc_t *n = find_node(w, node_id);
     if (!n) return -1;
-    n->provider      = dup_or_null(provider);
-    n->model         = dup_or_null(model);
-    n->model_version = dup_or_null(version);
+    /* Free any prior values: a node's model can be set more than once
+     * (e.g. the gateway records it, then a replay re-records it), and
+     * trace_writer_close owns these, so overwriting without freeing leaks. */
+    free(n->provider);      n->provider      = dup_or_null(provider);
+    free(n->model);         n->model         = dup_or_null(model);
+    free(n->model_version); n->model_version = dup_or_null(version);
     return 0;
 }
 

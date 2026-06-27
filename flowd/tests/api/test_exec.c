@@ -964,6 +964,7 @@ test_load_errors_no_crash(void)
         } else {
             fail("load-error/reports-R150", err ? err : "no error json");
         }
+        free(err);   /* flowd_last_error_json read-and-clears: the caller owns the string */
     }
 }
 
