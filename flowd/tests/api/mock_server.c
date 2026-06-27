@@ -180,7 +180,9 @@ mock_server_start(const char *response)
         close(m->listen_fd); free(m->response); free(m); return NULL;
     }
 
-    pipe(m->ready_pipe);
+    if (pipe(m->ready_pipe) != 0) {   /* pipe is warn_unused_result on glibc */
+        close(m->listen_fd); free(m->response); free(m); return NULL;
+    }
     pthread_create(&m->thread, NULL, worker, m);
     /* Wait until the worker actually called accept() (the ready
      * byte is written immediately before). */
