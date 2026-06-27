@@ -88,8 +88,8 @@ slurp(const char *path)
     rewind(fp);
     char *buf = malloc((size_t)sz + 1u);
     if (!buf) { fclose(fp); return NULL; }
-    fread(buf, 1, (size_t)sz, fp);
-    buf[sz] = '\0';
+    size_t rd = fread(buf, 1, (size_t)sz, fp);   /* use the count: glibc marks fread warn_unused_result */
+    buf[rd] = '\0';
     fclose(fp);
     return buf;
 }
@@ -495,7 +495,6 @@ test_trace_dir_create_fails_R301(void)
     diag_destroy(diag);
     unlink(blocker);
 }
-
 
 int
 main(void)

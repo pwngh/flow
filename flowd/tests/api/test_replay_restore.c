@@ -117,7 +117,8 @@ int main(void) {
                     char *hit = strstr(buf, "{\"x\":7}");
                     if (hit) {
                         FILE *w = fopen(np, "wb");
-                        fwrite(buf, 1, (size_t)(hit - buf), w);
+                        size_t wn = fwrite(buf, 1, (size_t)(hit - buf), w);  /* fwrite is warn_unused_result on glibc */
+                        (void)wn;
                         fputs("{\"x\":999}", w);
                         fputs(hit + 7, w);   /* skip {"x":7} */
                         fclose(w);

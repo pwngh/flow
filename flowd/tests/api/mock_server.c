@@ -46,7 +46,6 @@ ci_strstr(const char *hay, const char *needle)
     return NULL;
 }
 
-
 struct mock_server {
     int             listen_fd;
     uint16_t        port;
@@ -55,7 +54,6 @@ struct mock_server {
     mock_capture_t  capture;        /* heap-owned fields */
     int             ready_pipe[2];  /* signals "thread is listening" */
 };
-
 
 static char *
 slurp_until_end_of_headers(int fd, size_t *out_len)
@@ -80,7 +78,6 @@ slurp_until_end_of_headers(int fd, size_t *out_len)
     return buf;
 }
 
-
 static void *
 worker(void *user)
 {
@@ -88,7 +85,8 @@ worker(void *user)
 
     /* Signal readiness. */
     char r = '1';
-    write(m->ready_pipe[1], &r, 1);
+    ssize_t wn = write(m->ready_pipe[1], &r, 1);  /* write is warn_unused_result on glibc */
+    (void)wn;
 
     int client = accept(m->listen_fd, NULL, NULL);
     if (client < 0) return NULL;
@@ -150,7 +148,6 @@ worker(void *user)
     return NULL;
 }
 
-
 mock_server_t *
 mock_server_start(const char *response)
 {
@@ -188,7 +185,8 @@ mock_server_start(const char *response)
     /* Wait until the worker actually called accept() (the ready
      * byte is written immediately before). */
     char r;
-    read(m->ready_pipe[0], &r, 1);
+    ssize_t rn = read(m->ready_pipe[0], &r, 1);  /* read is warn_unused_result on glibc */
+    (void)rn;
     return m;
 }
 

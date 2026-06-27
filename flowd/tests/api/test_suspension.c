@@ -184,7 +184,7 @@ test_suspension_file(void)
     fseek(fp, 0, SEEK_END);
     long sz = ftell(fp); rewind(fp);
     char *buf = malloc((size_t)sz + 1u);
-    fread(buf, 1, (size_t)sz, fp); buf[sz] = '\0'; fclose(fp);
+    size_t rd = fread(buf, 1, (size_t)sz, fp); buf[rd] = '\0'; fclose(fp);   /* fread is warn_unused_result on glibc */
     cJSON *j = cJSON_Parse(buf);
     free(buf);
     if (!j) { fail("susp-file/parses", "invalid JSON"); return; }
@@ -356,7 +356,6 @@ test_resume_cross_ref(void)
     trace_reader_close(r);
     diag_destroy(diag);
 }
-
 
 int
 main(void)
