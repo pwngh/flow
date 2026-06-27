@@ -48,6 +48,8 @@ jobs:
              web/flowd.js web/flowd.wasm \
              _site/
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true   # provision Pages on first run (needs the pages:write permission above)
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
