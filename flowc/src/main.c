@@ -35,7 +35,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 /* The version string format is "flowc (Flow) M.N.P" where M.N.P
  * is a semantic version. */
 #define FLOWC_VERSION "0.1.0"

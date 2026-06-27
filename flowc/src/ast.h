@@ -365,7 +365,6 @@ typedef struct {
     Expr  *operand;
 } ExprUnop;
 
-
 /* Pattern in a match arm. Four forms:
  *   PAT_WILDCARD       — `_`
  *   PAT_BIND           — bare lower-case ident: catch-all that also
@@ -608,7 +607,6 @@ struct EffectClause {
     const char  *model_name;
     RetryPolicy  retry;
 };
-
 
 struct ToolDecl {
     SrcLoc        loc;

@@ -465,6 +465,7 @@ slurp_file(const char *path, size_t *out_len, DiagStream *diag)
     return buf;
 }
 
+
 /* ---- Type resolution ---- */
 
 /* Resolve a "type" string at a particular JSON path; emit on miss. */
@@ -697,6 +698,7 @@ pass_build_variant_index(load_ctx_t *c)
     variant_index_sort(c->rt->types);
 }
 
+
 /* ---- Tools ---- */
 
 static bool
@@ -881,6 +883,7 @@ pass_tools(load_ctx_t *c, const cJSON *tools_arr)
     }
     return true;
 }
+
 
 /* ---- Flows ---- */
 

@@ -937,7 +937,6 @@ test_model_versioned_replay(void)
     flowd_destroy(rt);
 }
 
-
 int
 main(void)
 {

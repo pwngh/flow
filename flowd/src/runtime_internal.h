@@ -52,7 +52,6 @@ typedef struct {
     void               *user_ctx;
 } tool_impl_t;
 
-
 struct flowd_runtime {
     Arena            *arena;
     cJSON            *ir_root;          /* heap-owned via cJSON malloc */
@@ -108,6 +107,5 @@ struct flowd_runtime {
      * next poll point, not immediately. */
     volatile sig_atomic_t cancel_requested;
 };
-
 
 #endif /* FLOWD_RUNTIME_INTERNAL_H */

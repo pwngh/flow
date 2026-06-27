@@ -217,5 +217,4 @@ exec_status_t flowd_resume_impl(flowd_runtime *rt,
                                 char         **out_suspension_token,
                                 DiagStream    *diag);
 
-
 #endif /* FLOWD_EXEC_H */

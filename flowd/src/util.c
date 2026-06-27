@@ -371,6 +371,7 @@ void diag_note(DiagStream *s, SrcLoc loc, const char *fmt, ...)
     va_end(ap);
 }
 
+
 /* ====================================================================
  * SHA-256 wrapper
  *

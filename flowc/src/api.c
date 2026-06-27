@@ -66,7 +66,6 @@ struct flowc_context {
     size_t out_len;
 };
 
-
 flowc_context *flowc_context_create(void)
 {
     flowc_context *ctx = calloc(1, sizeof *ctx);
@@ -168,7 +167,6 @@ typedef enum {
     STAGE_CHECKED,
     STAGE_IR
 } pipeline_stage;
-
 
 static const char *token_kind_name(int kind)
 {
@@ -282,7 +280,6 @@ static void dump_token_line(FILE *out, int kind, SrcLoc loc)
     }
 }
 
-
 static int run_pipeline(flowc_context *ctx,
                         const char *src, size_t len,
                         const char *name,
@@ -368,7 +365,6 @@ static int run_pipeline(flowc_context *ctx,
     }
     return diag_error_count(ctx->diag) > 0 ? -1 : 0;
 }
-
 
 /* Run the pipeline, capture output via open_memstream, install in
  * the context's one-slot buffer, return the buffer pointer or NULL.

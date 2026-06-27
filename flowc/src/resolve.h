@@ -43,7 +43,6 @@
 #include "ast.h"
 #include "util.h"
 
-
 typedef struct {
     const TypeDecl **types;
     size_t           n_types;
@@ -52,7 +51,6 @@ typedef struct {
     const FlowDecl **flows;
     size_t           n_flows;
 } ResolveGlobals;
-
 
 typedef struct {
     /* Names visible inside the flow body, in declaration order:
@@ -64,7 +62,6 @@ typedef struct {
     size_t       n;
 } ResolveLocals;
 
-
 typedef struct {
     Program        *program;
     ResolveGlobals  globals;
@@ -74,13 +71,11 @@ typedef struct {
     size_t          n_flow_locals;
 } Resolved;
 
-
 /* Build globals, walk all Type expressions, walk each flow body.
  * Diagnostics are emitted through `diag`; the Resolved struct is
  * always returned non-NULL. Consult diag_error_count(diag)
  * afterward to determine success. Storage is arena-allocated. */
 Resolved *resolve_run(Arena *arena, DiagStream *diag, Program *program);
-
 
 /* Lookups into the global symbol table by name. Return the matching
  * declaration, or NULL if no global of that role bears the name.
@@ -90,10 +85,8 @@ Resolved *resolve_run(Arena *arena, DiagStream *diag, Program *program);
 const TypeDecl *globals_find_type(const ResolveGlobals *g, const char *name);
 const ToolDecl *globals_find_tool(const ResolveGlobals *g, const char *name);
 
-
 /* Dump the resolved program in the canonical golden-test format
  * documented at the top of src/resolve.c. */
 void resolve_dump(FILE *out, const Resolved *r);
-
 
 #endif /* FLOWC_RESOLVE_H */

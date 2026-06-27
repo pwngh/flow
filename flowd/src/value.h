@@ -212,5 +212,4 @@ void value_emit_json_string(FILE *out, const char *s);
 
 void value_hash(const value_t *v, char out_hex[65]);
 
-
 #endif /* FLOWD_VALUE_H */

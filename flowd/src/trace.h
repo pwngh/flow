@@ -80,7 +80,6 @@ typedef enum {
  * runtime-level flowd_set_redactor takes the same callback shape.
  * ==================================================================== */
 
-
 /* Open a writer. Creates traces/<flow>/<execution_id>/ and the
  * subdirectories (nodes/, values/). Returns NULL on failure.
  * Directory-create failures emit a diagnostic (R301) via diag;
@@ -271,6 +270,5 @@ char *trace_reader_invocation_inputs(const trace_reader_t *r,
 size_t trace_reader_node_count(const trace_reader_t *r);
 
 void trace_reader_close(trace_reader_t *r);
-
 
 #endif /* FLOWD_TRACE_H */

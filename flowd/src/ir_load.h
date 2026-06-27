@@ -366,5 +366,4 @@ void flowd_canonical_dump_lite(const flowd_runtime *rt, FILE *out);
 
 void flowd_canonical_dump_json(const flowd_runtime *rt, FILE *out);
 
-
 #endif /* FLOWD_IR_LOAD_H */

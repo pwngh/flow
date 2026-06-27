@@ -1046,7 +1046,6 @@ test_stub_host(void)
     flowd_destroy(rt);
 }
 
-
 int
 main(void)
 {

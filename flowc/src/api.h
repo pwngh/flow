@@ -85,13 +85,11 @@ extern "C" {
 
 typedef struct flowc_context flowc_context;
 
-
 /* Public projection of the internal Diagnostic struct. The layout
  * is stable within the v0.1.x line (FLOWC_VERSION in src/main.c);
  * future minor versions may extend it additively (new fields
  * appended at the end). */
 typedef Diagnostic flowc_diagnostic;
-
 
 /* Allocate a fresh context. The context starts in record-only diag
  * mode (no stderr sink) with max_errors = 1 and -Werror off. The CLI
@@ -199,7 +197,6 @@ int                     flowc_error_count(const flowc_context *ctx);
  *
  * Invalidated by flowc_context_reset / flowc_context_destroy. */
 DiagStream *flowc_diag_stream(flowc_context *ctx);
-
 
 #ifdef __cplusplus
 }

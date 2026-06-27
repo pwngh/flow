@@ -55,7 +55,6 @@ static void assert_eq(const char *n, const char *got, const char *want) {
     }
 }
 
-
 static void
 rm_rf(const char *path)
 {
@@ -71,7 +70,6 @@ rm_rf(const char *path)
     }
     closedir(d); rmdir(path);
 }
-
 
 /* IR with a tool `ask` of effect `model("claude-3-5-sonnet")` and a
  * one-line flow that calls it. */
@@ -90,7 +88,6 @@ static const char *IR =
     "   \"args\":[{\"field\":\"prompt\","
     "     \"value\":{\"kind\":\"path\",\"segments\":[\"prompt\"]}}]}}]}";
 
-
 /* A canned 200 response body shaped like Anthropic's Messages API.
  * Includes a `usage` block so the metrics extraction can be tested. */
 static const char *CANNED_RESPONSE =
@@ -104,7 +101,6 @@ static const char *CANNED_RESPONSE =
     "\"text\":\"The capital is Paris.\"}],"
     "\"stop_reason\":\"end_turn\","
     "\"usage\":{\"input_tokens\":7,\"output_tokens\":12}}";
-
 
 static void
 test_dispatch_and_extract(void)
@@ -395,7 +391,6 @@ test_redactor_end_to_end(void)
     }
     (void)trace_dir;
 }
-
 
 int
 main(void)

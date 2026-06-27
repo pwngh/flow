@@ -174,5 +174,4 @@ char *gateway_invoke(gateway_t           *gw,
                      char               **err_msg,
                      gateway_result_meta_t *out_meta);
 
-
 #endif /* FLOWD_GATEWAY_H */

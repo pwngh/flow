@@ -47,7 +47,6 @@
 #include "resolve.h"
 #include "util.h"
 
-
 typedef struct {
     /* types[i] is the inferred type of resolved->flow_locals[k].names[i]
      * for the flow at index k in resolved->globals.flows.  May be
@@ -63,13 +62,11 @@ typedef struct {
     const Type *return_type;
 } CheckedFlow;
 
-
 typedef struct {
     Resolved     *resolved;
     CheckedFlow **flows;       /* parallel to resolved->globals.flows */
     size_t        n_flows;
 } Checked;
-
 
 /* Run the type checker on a resolved program. Diagnostics are
  * emitted through `diag`; consult diag_error_count(diag) afterward
@@ -77,10 +74,8 @@ typedef struct {
  * non-NULL; on errors, some type slots may be NULL. */
 Checked *check_run(Arena *arena, DiagStream *diag, Resolved *resolved);
 
-
 /* Dump the checked program in the canonical golden-test format
  * documented at the top of src/check.c. */
 void check_dump(FILE *out, Arena *arena, const Checked *c);
-
 
 #endif /* FLOWC_CHECK_H */

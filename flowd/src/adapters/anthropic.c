@@ -46,7 +46,6 @@
 
 #include "../cjson/cJSON.h"
 
-
 /* No mutable adapter state: all per-call configuration travels through
  * `user_ctx` (the cfg pointer), so the adapter struct itself adds no
  * cross-thread hazard. One caveat applies to concurrent invocation:
@@ -67,7 +66,6 @@ static int anthropic_supports_model(const char *model, void *user_ctx)
     (void)user_ctx;
     return model && strncmp(model, "claude-", 7) == 0;
 }
-
 
 /* Accumulates the response body across the many recv_cb calls libcurl
  * makes as the body arrives in chunks; recv_cb grows it as needed. */
@@ -110,7 +108,6 @@ recv_cb(char *ptr, size_t size, size_t nmemb, void *user)
     return add;
 }
 
-
 /* Build the request body for Anthropic. Reads only the `prompt`
  * field from the args object and sends it as a single user message;
  * all other args fields are ignored (see the v1 note in the file
@@ -144,7 +141,6 @@ build_request_body(const char *model, const char *args_json,
     cJSON_Delete(args);
     return body;
 }
-
 
 /* Extract the assistant message text from Anthropic's response and
  * wrap it as a JSON string suitable for the runtime to parse as
@@ -228,7 +224,6 @@ extract_text_response(const char *body,
     cJSON_Delete(parsed);
     return outs;
 }
-
 
 /* Core dispatch: issues one HTTP request and fills `out`. Used by
  * both the v1 `invoke` shim and the v2 `invoke_with_metrics` entry.
@@ -376,7 +371,6 @@ do_invoke(const char *model, const char *request_json,
     out->response_json = text;
 }
 
-
 static char *
 anthropic_invoke(const char *model, const char *request_json,
                  char **err_msg, void *user_ctx)
@@ -391,7 +385,6 @@ anthropic_invoke(const char *model, const char *request_json,
     return r.response_json;
 }
 
-
 static void
 anthropic_invoke_with_metrics(const char *model, const char *request_json,
                               flowd_adapter_response_t *result,
@@ -399,7 +392,6 @@ anthropic_invoke_with_metrics(const char *model, const char *request_json,
 {
     do_invoke(model, request_json, user_ctx, result);
 }
-
 
 flowd_provider_adapter_t
 anthropic_adapter(const anthropic_adapter_config_t *cfg)

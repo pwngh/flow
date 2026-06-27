@@ -41,7 +41,6 @@
 
 #include "../flowd.h"
 
-
 /* Configuration for the adapter. Populated by the host before
  * registration; lifetime must exceed the runtime's. */
 typedef struct {
@@ -68,7 +67,6 @@ typedef struct {
     double price_out_per_mtok;
 } anthropic_adapter_config_t;
 
-
 /* Build the adapter struct. Returns the adapter by value; the
  * caller keeps it (and the `cfg` it points at) alive for the
  * runtime's lifetime. Pass `cfg` by pointer to identify which
@@ -89,6 +87,5 @@ typedef struct {
  */
 flowd_provider_adapter_t
 anthropic_adapter(const anthropic_adapter_config_t *cfg);
-
 
 #endif /* FLOWD_ADAPTERS_ANTHROPIC_H */

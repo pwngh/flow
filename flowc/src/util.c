@@ -396,6 +396,7 @@ static bool detect_color_auto(void)
 #endif
 }
 
+
 /* --- Lifecycle --------------------------------------------------- */
 
 DiagStream *diag_create(void)
@@ -453,6 +454,7 @@ void diag_clear(DiagStream *s)
     s->json_started  = false;
 }
 
+
 /* --- Configuration ----------------------------------------------- */
 
 void diag_set_format(DiagStream *s, DiagFormat fmt)
@@ -500,6 +502,7 @@ const Diagnostic *diag_at(const DiagStream *s, size_t i)
     }
     return &s->records[i];
 }
+
 
 /* --- Recording --------------------------------------------------- */
 
@@ -560,6 +563,7 @@ static void record_push(DiagStream *s, Diagnostic d)
     s->records[s->record_count++] = d;
 }
 
+
 /* --- text format ------------------------------------------------- */
 
 static const char *sev_word(DiagSeverity sev)
@@ -605,6 +609,7 @@ static void emit_text(const DiagStream *s, SrcLoc loc, DiagSeverity sev,
     fputc('\n', stderr);
 }
 
+
 /* --- JSON format ------------------------------------------------- */
 
 static void emit_json(DiagStream *s, SrcLoc loc, DiagSeverity sev,
@@ -632,6 +637,7 @@ static void emit_json(DiagStream *s, SrcLoc loc, DiagSeverity sev,
     flowc_json_escape(stderr, msg);
     fputs("\"}", stderr);
 }
+
 
 /* --- public entry points ---------------------------------------- */
 
